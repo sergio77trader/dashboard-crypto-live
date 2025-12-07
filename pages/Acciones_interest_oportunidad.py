@@ -5,7 +5,10 @@ import plotly.graph_objects as go
 import numpy as np
 import re
 import time
-import requests # Necesario para crear una sesión fake
+import random
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(layout="wide", page_title="SystemaTrader - Options Screener Ultimate")
@@ -48,35 +51,60 @@ def check_proximity(price, wall_price, threshold_pct):
     distance = abs(price - wall_price) / price * 100
     return distance <= threshold_pct
 
-# --- SESIÓN FAKE (NUEVO) ---
-def get_yahoo_session():
-    """Crea una sesión que simula ser un navegador Chrome para evitar bloqueo 429"""
+# --- PROTOCOLO DE CONEXIÓN ROBUSTA (V13.0) ---
+def get_robust_session():
+    """
+    Crea una sesión con reintentos automáticos (Retry Strategy).
+    Si Yahoo da error 429 (Too Many Requests), espera y reintenta.
+    """
     session = requests.Session()
+    
+    # Estrategia de reintento: 3 intentos totales
+    # backoff_factor=1 significa: espera 1s, luego 2s, luego 4s...
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"]
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
+    # Headers rotativos básicos (Chrome estándar)
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
     })
     return session
 
 @st.cache_data(ttl=900)
 def analyze_options_chain(ticker):
     try:
-        # Usamos la sesión fake
-        tk = yf.Ticker(ticker, session=get_yahoo_session())
+        # Inyectamos la sesión robusta
+        session = get_robust_session()
+        tk = yf.Ticker(ticker, session=session)
         
+        # 1. PRECIO
         current_price = 0
-        # Intentamos obtener precio
         try:
+            # Fast info suele ser lo primero que falla con throttling
             if hasattr(tk, 'fast_info') and tk.fast_info.last_price:
                 current_price = float(tk.fast_info.last_price)
         except: pass
         
+        # Fallback a histórico si fast_info falla
         if current_price == 0:
-            hist = tk.history(period="5d") # 5 días por seguridad
-            if not hist.empty: current_price = hist['Close'].iloc[-1]
+            try:
+                hist = tk.history(period="5d")
+                if not hist.empty: current_price = hist['Close'].iloc[-1]
+            except: pass
         
         if current_price == 0: return None
 
-        # Intentamos obtener opciones (Si falla aquí es bloqueo o no tiene opciones)
+        # 2. OPCIONES (El punto crítico)
         try:
             exps = tk.options
         except:
@@ -84,11 +112,11 @@ def analyze_options_chain(ticker):
             
         if not exps: return None
         
-        # Estrategia Multi-Vencimiento: Si el primero falla/está vacío, miramos el siguiente
         target_date = None
         calls, puts = pd.DataFrame(), pd.DataFrame()
         
-        for date in exps[:3]: # Miramos hasta 3 vencimientos
+        # Miramos hasta 3 vencimientos
+        for date in exps[:3]:
             try:
                 opts = tk.option_chain(date)
                 c, p = opts.calls, opts.puts
@@ -101,6 +129,7 @@ def analyze_options_chain(ticker):
         
         if target_date is None: return None
         
+        # 3. CÁLCULOS
         total_call_oi = calls['openInterest'].sum()
         total_put_oi = puts['openInterest'].sum()
         if total_call_oi == 0: total_call_oi = 1
@@ -114,14 +143,11 @@ def analyze_options_chain(ticker):
         market_consensus = (call_wall + put_wall) / 2
         calculation_price = current_price
         
-        # Validación básica de datos erróneos
         if market_consensus > 0 and current_price > 0:
-            if abs(current_price - market_consensus) / market_consensus > 0.6: # Tolerancia 60%
+            if abs(current_price - market_consensus) / market_consensus > 0.6:
                 data_quality = "ERROR_PRECIO"
-                # calculation_price = market_consensus # (Opcional: forzar precio)
 
         strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-        # Filtramos strikes extremos para optimizar cálculo Max Pain
         strikes = [s for s in strikes if calculation_price * 0.5 < s < calculation_price * 1.5]
         
         cash_values = []
@@ -144,23 +170,30 @@ def analyze_options_chain(ticker):
 
 def get_batch_analysis(ticker_list):
     results = []
-    # Barra de progreso
-    prog = st.progress(0, text="Iniciando conexión segura...")
+    prog = st.progress(0, text="Iniciando motor de extracción...")
     total = len(ticker_list)
     
+    # Creamos un contenedor vacío para mostrar logs en vivo
+    status_log = st.empty()
+    
     for i, t in enumerate(ticker_list):
+        # Actualizamos log visual
+        status_log.caption(f"⏳ Procesando: **{t}** ({i+1}/{total})")
+        
         data = analyze_options_chain(t)
         if data: 
             results.append(data)
         
-        # --- EL SECRETO ANTI-BLOQUEO ---
-        # Dormimos 0.25 segundos entre cada petición.
-        # Esto evita el error 429 Too Many Requests en la nube.
-        time.sleep(0.25)
+        # --- RETARDO ALEATORIO HUMANIZADO ---
+        # No usamos tiempo fijo. Usamos aleatorio entre 0.5s y 1.5s
+        # Esto engaña mejor a los algoritmos de bloqueo que un intervalo fijo
+        sleep_time = random.uniform(0.5, 1.5)
+        time.sleep(sleep_time)
         
-        prog.progress((i + 1) / total, text=f"Procesando {t} ({i+1}/{total})...")
+        prog.progress((i + 1) / total)
         
     prog.empty()
+    status_log.empty()
     return results
 
 # --- INTERFAZ ---
@@ -170,51 +203,44 @@ if 'analysis_results' not in st.session_state:
     st.session_state['analysis_results'] = {}
     st.session_state['current_view'] = "Esperando escaneo..."
 
-# --- SIDEBAR (MODIFICADO PARA CUSTOM INPUT) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Configuración")
     proximity_threshold = st.slider("Alerta Proximidad (%)", 1, 10, 3)
     
     st.divider()
     
-    # SECCIÓN 1: MERCADO COMPLETO
+    # SECCIÓN 1
     st.header("1. Escaneo Masivo")
-    st.info("⚠️ El escaneo completo tardará unos 30-40 segundos para evitar bloqueos del servidor.")
+    st.warning("⚠️ El escaneo masivo es lento en la nube para garantizar que lleguen todos los datos.")
     if st.button("ESCANEAR BASE DE DATOS ENTERA", type="primary"):
         st.session_state['current_view'] = "Mercado Completo (ADRs + CEDEARs)"
         sorted_tickers = sorted(list(CEDEAR_DATABASE))
-        with st.spinner("Ejecutando protocolo Anti-Bloqueo..."):
+        with st.spinner("Ejecutando 'The Bulldozer' Protocol..."):
             st.session_state['analysis_results'] = get_batch_analysis(sorted_tickers)
 
     st.divider()
 
-    # SECCIÓN 2: TU LISTA
+    # SECCIÓN 2
     st.header("2. Lista Personalizada")
-    st.info("Escribe los tickers separados por coma o espacio.")
-    
-    # Text Area para input libre
     custom_input = st.text_area("Ingresa Activos (Ej: AAPL, MELI, GGAL):", height=100)
     
     if st.button("🎯 ANALIZAR MI LISTA"):
         if custom_input:
-            # Limpieza de input usando Regex (separa por comas, espacios o saltos de línea)
             custom_tickers = re.split(r'[,\s\n]+', custom_input)
-            # Filtramos vacíos y ponemos mayúsculas
             custom_tickers = [t.strip().upper() for t in custom_tickers if t.strip()]
             
             if custom_tickers:
                 st.session_state['current_view'] = "Lista Personalizada"
-                with st.spinner(f"Analizando {len(custom_tickers)} activos seleccionados..."):
+                with st.spinner(f"Analizando {len(custom_tickers)} activos..."):
                     st.session_state['analysis_results'] = get_batch_analysis(custom_tickers)
             else:
-                st.error("Por favor escribe al menos un ticker válido.")
-        else:
-            st.error("El campo está vacío.")
+                st.error("Lista inválida.")
 
     st.markdown("---")
-    st.caption("SystemaTrader v12.5 | Anti-Bot Protocol Active")
+    st.caption("SystemaTrader v13.0 | Retry & Backoff Engine")
 
-# --- FASE 1: TABLERO GLOBAL ---
+# --- RESULTADOS ---
 st.subheader(f"1️⃣ Resultados: {st.session_state.get('current_view', 'Sin Datos')}")
 
 if st.session_state['analysis_results']:
@@ -222,9 +248,7 @@ if st.session_state['analysis_results']:
     df_table = pd.DataFrame(results)
     
     if not df_table.empty:
-        # Métricas de éxito
-        success_rate = len(df_table)
-        st.caption(f"✅ Activos procesados con éxito: {success_rate}")
+        st.success(f"✅ Extracción completada: {len(df_table)} activos recuperados.")
 
         def get_alert_status(row):
             if row['Data_Quality'] == 'ERROR_PRECIO': return "❌ ERROR DATA"
@@ -237,7 +261,6 @@ if st.session_state['analysis_results']:
         df_display['Alerta'] = df_display.apply(get_alert_status, axis=1)
         df_display['Sentimiento'] = df_display['PC_Ratio'].apply(get_sentiment_label)
         
-        # --- CÁLCULO DE PORCENTAJES DE DISTANCIA ---
         df_display['% Techo'] = ((df_display['Call_Wall'] - df_display['Price']) / df_display['Price']) * 100
         df_display['% Piso'] = ((df_display['Put_Wall'] - df_display['Price']) / df_display['Price']) * 100
 
@@ -250,7 +273,6 @@ if st.session_state['analysis_results']:
         else:
             df_final = df_display.sort_values(by=['Alerta', 'Ticker'], ascending=[False, True])
 
-        # --- TABLA DEFINITIVA ---
         st.dataframe(
             df_final[['Ticker', 'Price', 'Max_Pain', 'Alerta', 'Call_Wall', '% Techo', 'Put_Wall', '% Piso', 'Sentimiento']],
             column_config={
@@ -259,15 +281,15 @@ if st.session_state['analysis_results']:
                 "Max_Pain": st.column_config.NumberColumn("Max Pain", format="$%.2f"),
                 "Alerta": st.column_config.TextColumn("Estado"),
                 "Call_Wall": st.column_config.NumberColumn("Techo", format="$%.2f"),
-                "% Techo": st.column_config.NumberColumn("Dist. Techo %", format="%.2f%%", help="Distancia hasta la resistencia Call"),
+                "% Techo": st.column_config.NumberColumn("Dist. Techo %", format="%.2f%%"),
                 "Put_Wall": st.column_config.NumberColumn("Piso", format="$%.2f"),
-                "% Piso": st.column_config.NumberColumn("Dist. Piso %", format="%.2f%%", help="Distancia hasta el soporte Put"),
+                "% Piso": st.column_config.NumberColumn("Dist. Piso %", format="%.2f%%"),
             },
             use_container_width=True, hide_index=True, height=600
         )
-    else: st.warning("Sin datos. Intenta de nuevo en unos minutos.")
+    else: st.error("No se pudieron recuperar datos. Yahoo ha bloqueado temporalmente la IP del servidor. Intenta en 10 minutos.")
 
-    # --- FASE 2: DETALLE ---
+    # --- DETALLE ---
     st.divider()
     st.subheader("2️⃣ Análisis Profundo")
     ticker_options = sorted([r['Ticker'] for r in results])
@@ -277,7 +299,7 @@ if st.session_state['analysis_results']:
         
         if asset_data:
             if asset_data['Data_Quality'] == 'ERROR_PRECIO':
-                st.error(f"🚨 **ERROR DE PRECIO:** Yahoo reporta ${asset_data['Price']:.2f} pero el mercado de opciones apunta a ${asset_data['Max_Pain']:.2f}. Verifica en TradingView.")
+                st.error(f"🚨 **ERROR DE PRECIO:** Yahoo reporta ${asset_data['Price']:.2f} pero el mercado de opciones apunta a ${asset_data['Max_Pain']:.2f}.")
 
             k1, k2, k3, k4, k5 = st.columns(5)
             
@@ -293,7 +315,6 @@ if st.session_state['analysis_results']:
 
             c1, c2 = st.columns([1, 2])
             with c1:
-                st.markdown("##### Sentimiento")
                 labels = ['Calls', 'Puts']
                 values = [asset_data['Call_OI'], asset_data['Put_OI']]
                 fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.4, marker=dict(colors=['#00CC96', '#EF553B']))])
@@ -301,7 +322,6 @@ if st.session_state['analysis_results']:
                 st.plotly_chart(fig_pie, use_container_width=True)
                 
             with c2:
-                st.markdown("##### Muro de Liquidez")
                 calls, puts = asset_data['Calls_DF'], asset_data['Puts_DF']
                 center_price = asset_data['Calculated_Price_Ref']
                 min_s, max_s = center_price * 0.85, center_price * 1.15
@@ -314,22 +334,13 @@ if st.session_state['analysis_results']:
                 
                 if asset_data['Data_Quality'] == "OK":
                     fig_wall.add_vline(x=asset_data['Price'], line_dash="dash", line_color="white", annotation_text="Precio")
-                
-                fig_wall.add_vline(x=asset_data['Call_Wall'], line_dash="dot", line_color="#00FF00", annotation_text="TECHO")
-                fig_wall.add_vline(x=asset_data['Put_Wall'], line_dash="dot", line_color="#FF0000", annotation_text="PISO")
                 fig_wall.add_vline(x=asset_data['Max_Pain'], line_dash="dash", line_color="yellow", annotation_text="Max Pain")
                 
-                fig_wall.update_layout(barmode='overlay', height=350, margin=dict(t=20), xaxis_title="Strike ($)", yaxis_title="Contratos", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                fig_wall.update_layout(barmode='overlay', height=350, margin=dict(t=20), xaxis_title="Strike ($)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 st.plotly_chart(fig_wall, use_container_width=True)
-
-            ratio_desc = "🔥 **EXTREMO MIEDO / OPORTUNIDAD:** Mercado muy cubierto (Posible Rebote)." if asset_data['PC_Ratio'] > 1.2 else ("🚀 **EUFORIA:** Cuidado, demasiada confianza alcista." if asset_data['PC_Ratio'] < 0.6 else "⚖️ **NEUTRAL:** Mercado balanceado.")
-            st.info(f"### 🧠 Interpretación Táctica:\n1. **Imán (Max Pain ${asset_data['Max_Pain']:.2f}):** Precio objetivo de MM.\n2. **Sentimiento:** {ratio_desc}")
             
             link_yahoo, link_tv = generate_links(selected_ticker)
-            st.markdown("---")
-            col_foot1, col_foot2 = st.columns(2)
-            col_foot1.markdown(f"🔍 [Auditar Fuente Oficial (Yahoo Finance)]({link_yahoo})")
-            col_foot2.markdown(f"📈 [Abrir Gráfico (TradingView)]({link_tv})")
+            st.markdown(f"[Auditar en Yahoo]({link_yahoo}) | [Ver Gráfico]({link_tv})")
 
 else:
-    st.info("Dale al botón 'ESCANEAR' en la barra lateral para iniciar.")
+    st.info("Dale al botón 'ESCANEAR' en la barra lateral.")
