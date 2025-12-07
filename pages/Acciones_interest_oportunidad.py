@@ -35,7 +35,7 @@ STOCK_GROUPS = {
     '🌎 Brasil & China': ['PBR', 'VALE', 'ITUB', 'BABA', 'JD', 'BIDU']
 }
 
-# --- FUNCIONES ---
+# --- FUNCIONES AUXILIARES ---
 def get_sentiment_label(ratio):
     if ratio < 0.7: return "🚀 ALCISTA"
     elif ratio > 1.0: return "🐻 BAJISTA"
@@ -51,71 +51,52 @@ def check_proximity(price, wall_price, threshold_pct):
     distance = abs(price - wall_price) / price * 100
     return distance <= threshold_pct
 
-# --- PROTOCOLO DE CONEXIÓN ROBUSTA (V13.0) ---
+# --- PROTOCOLO DE CONEXIÓN ROBUSTA (V14.0) ---
 def get_robust_session():
-    """
-    Crea una sesión con reintentos automáticos (Retry Strategy).
-    Si Yahoo da error 429 (Too Many Requests), espera y reintenta.
-    """
     session = requests.Session()
-    
-    # Estrategia de reintento: 3 intentos totales
-    # backoff_factor=1 significa: espera 1s, luego 2s, luego 4s...
     retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
+        total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "OPTIONS"]
     )
-    
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    
-    # Headers rotativos básicos (Chrome estándar)
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
     return session
 
 @st.cache_data(ttl=900)
 def analyze_options_chain(ticker):
     try:
-        # Inyectamos la sesión robusta
         session = get_robust_session()
         tk = yf.Ticker(ticker, session=session)
         
-        # 1. PRECIO
+        # 1. Obtener Precio (Con reintentos internos)
         current_price = 0
         try:
-            # Fast info suele ser lo primero que falla con throttling
             if hasattr(tk, 'fast_info') and tk.fast_info.last_price:
                 current_price = float(tk.fast_info.last_price)
         except: pass
         
-        # Fallback a histórico si fast_info falla
         if current_price == 0:
             try:
                 hist = tk.history(period="5d")
                 if not hist.empty: current_price = hist['Close'].iloc[-1]
             except: pass
-        
-        if current_price == 0: return None
+            
+        if current_price == 0: return None # No se pudo obtener precio
 
-        # 2. OPCIONES (El punto crítico)
+        # 2. Obtener Cadena de Opciones
         try:
             exps = tk.options
-        except:
-            return None
+        except: return None
             
         if not exps: return None
         
+        # Estrategia Multi-Vencimiento (Miramos los primeros 3)
         target_date = None
         calls, puts = pd.DataFrame(), pd.DataFrame()
         
-        # Miramos hasta 3 vencimientos
         for date in exps[:3]:
             try:
                 opts = tk.option_chain(date)
@@ -124,12 +105,11 @@ def analyze_options_chain(ticker):
                     calls, puts = c, p
                     target_date = date
                     break
-            except:
-                continue
+            except: continue
         
         if target_date is None: return None
         
-        # 3. CÁLCULOS
+        # 3. Cálculos Métricos
         total_call_oi = calls['openInterest'].sum()
         total_put_oi = puts['openInterest'].sum()
         if total_call_oi == 0: total_call_oi = 1
@@ -170,177 +150,184 @@ def analyze_options_chain(ticker):
 
 def get_batch_analysis(ticker_list):
     results = []
-    prog = st.progress(0, text="Iniciando motor de extracción...")
+    prog = st.progress(0, text="Iniciando...")
     total = len(ticker_list)
-    
-    # Creamos un contenedor vacío para mostrar logs en vivo
     status_log = st.empty()
     
     for i, t in enumerate(ticker_list):
-        # Actualizamos log visual
-        status_log.caption(f"⏳ Procesando: **{t}** ({i+1}/{total})")
-        
+        status_log.caption(f"⏳ Procesando: **{t}**")
         data = analyze_options_chain(t)
         if data: 
             results.append(data)
         
-        # --- RETARDO ALEATORIO HUMANIZADO ---
-        # No usamos tiempo fijo. Usamos aleatorio entre 0.5s y 1.5s
-        # Esto engaña mejor a los algoritmos de bloqueo que un intervalo fijo
-        sleep_time = random.uniform(0.5, 1.5)
-        time.sleep(sleep_time)
-        
+        # Pausa aleatoria para parecer humano
+        time.sleep(random.uniform(0.3, 0.8))
         prog.progress((i + 1) / total)
         
     prog.empty()
     status_log.empty()
     return results
 
-# --- INTERFAZ ---
-st.title("🌎 SystemaTrader: Escáner Global de Oportunidades")
+# --- INTERFAZ DE USUARIO ---
+st.title("🌎 SystemaTrader: Escáner de Opciones (Anti-Bloqueo)")
 
+# Inicializar Estado de Resultados Acumulados
 if 'analysis_results' not in st.session_state:
-    st.session_state['analysis_results'] = {}
-    st.session_state['current_view'] = "Esperando escaneo..."
+    st.session_state['analysis_results'] = [] # Lista vacía inicial
+if 'current_view' not in st.session_state:
+    st.session_state['current_view'] = "Esperando..."
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CENTRO DE MANDO ---
 with st.sidebar:
     st.header("⚙️ Configuración")
     proximity_threshold = st.slider("Alerta Proximidad (%)", 1, 10, 3)
     
     st.divider()
     
-    # SECCIÓN 1
-    st.header("1. Escaneo Masivo")
-    st.warning("⚠️ El escaneo masivo es lento en la nube para garantizar que lleguen todos los datos.")
-    if st.button("ESCANEAR BASE DE DATOS ENTERA", type="primary"):
-        st.session_state['current_view'] = "Mercado Completo (ADRs + CEDEARs)"
-        sorted_tickers = sorted(list(CEDEAR_DATABASE))
-        with st.spinner("Ejecutando 'The Bulldozer' Protocol..."):
-            st.session_state['analysis_results'] = get_batch_analysis(sorted_tickers)
+    # MODO 1: GRUPOS PREDEFINIDOS
+    st.header("1. Grupos Rápidos")
+    sel_group = st.selectbox("Elegir Grupo:", list(STOCK_GROUPS.keys()))
+    if st.button("🔎 Escanear Grupo"):
+        st.session_state['analysis_results'] = [] # Limpiamos anterior
+        st.session_state['current_view'] = sel_group
+        st.session_state['analysis_results'] = get_batch_analysis(STOCK_GROUPS[sel_group])
 
     st.divider()
 
-    # SECCIÓN 2
-    st.header("2. Lista Personalizada")
-    custom_input = st.text_area("Ingresa Activos (Ej: AAPL, MELI, GGAL):", height=100)
+    # MODO 2: FRAGMENTACIÓN (LA SOLUCIÓN CLAVE)
+    st.header("2. Escaneo Fragmentado")
+    st.info("Divide y vencerás. Escanea por lotes para evitar bloqueos.")
     
-    if st.button("🎯 ANALIZAR MI LISTA"):
-        if custom_input:
-            custom_tickers = re.split(r'[,\s\n]+', custom_input)
-            custom_tickers = [t.strip().upper() for t in custom_tickers if t.strip()]
+    # Preparar lotes
+    all_tickers = sorted(list(CEDEAR_DATABASE))
+    batch_size = 20 # Tamaño seguro
+    # Dividir lista en chunks
+    batches = [all_tickers[i:i + batch_size] for i in range(0, len(all_tickers), batch_size)]
+    
+    batch_labels = [f"Lote {i+1} ({b[0]} - {b[-1]})" for i, b in enumerate(batches)]
+    
+    selected_batch_idx = st.selectbox("Seleccionar Lote:", range(len(batches)), format_func=lambda x: batch_labels[x])
+    
+    accumulate = st.checkbox("➕ Acumular Resultados", value=True, help="Si marcas esto, los nuevos escaneos se suman a la tabla. Si no, la reemplazan.")
+    
+    if st.button("🚀 Escanear Lote Seleccionado"):
+        target_tickers = batches[selected_batch_idx]
+        st.session_state['current_view'] = f"Lote {selected_batch_idx + 1}"
+        
+        with st.spinner(f"Analizando {len(target_tickers)} activos..."):
+            new_results = get_batch_analysis(target_tickers)
             
-            if custom_tickers:
-                st.session_state['current_view'] = "Lista Personalizada"
-                with st.spinner(f"Analizando {len(custom_tickers)} activos..."):
-                    st.session_state['analysis_results'] = get_batch_analysis(custom_tickers)
+            if accumulate:
+                # Evitar duplicados si se escanea lo mismo
+                existing_tickers = {r['Ticker'] for r in st.session_state['analysis_results']}
+                for item in new_results:
+                    if item['Ticker'] not in existing_tickers:
+                        st.session_state['analysis_results'].append(item)
+                st.success(f"Lote agregado. Total activos: {len(st.session_state['analysis_results'])}")
             else:
-                st.error("Lista inválida.")
+                st.session_state['analysis_results'] = new_results
 
-    st.markdown("---")
-    st.caption("SystemaTrader v13.0 | Retry & Backoff Engine")
+    if st.button("🗑️ Limpiar Tabla"):
+        st.session_state['analysis_results'] = []
+        st.rerun()
 
-# --- RESULTADOS ---
-st.subheader(f"1️⃣ Resultados: {st.session_state.get('current_view', 'Sin Datos')}")
+    st.divider()
+    
+    # MODO 3: MANUAL
+    st.header("3. Manual")
+    custom_in = st.text_area("Tickers:", height=70)
+    if st.button("Analizar Manual"):
+        if custom_in:
+            manual_tickers = [t.strip().upper() for t in re.split(r'[,\s]+', custom_in) if t.strip()]
+            st.session_state['current_view'] = "Manual"
+            st.session_state['analysis_results'] = get_batch_analysis(manual_tickers)
+
+# --- VISUALIZACIÓN DE RESULTADOS ---
+st.subheader(f"📊 Resultados: {len(st.session_state['analysis_results'])} Activos Cargados")
 
 if st.session_state['analysis_results']:
     results = st.session_state['analysis_results']
     df_table = pd.DataFrame(results)
     
     if not df_table.empty:
-        st.success(f"✅ Extracción completada: {len(df_table)} activos recuperados.")
+        # Lógica de Alertas
+        def get_alert(row):
+            if row['Data_Quality'] == 'ERROR_PRECIO': return "❌ ERROR"
+            alerts = []
+            if check_proximity(row['Price'], row['Call_Wall'], proximity_threshold): alerts.append("🧱 TECHO")
+            if check_proximity(row['Price'], row['Put_Wall'], proximity_threshold): alerts.append("🟢 PISO")
+            return " + ".join(alerts) if alerts else "OK"
 
-        def get_alert_status(row):
-            if row['Data_Quality'] == 'ERROR_PRECIO': return "❌ ERROR DATA"
-            status = []
-            if check_proximity(row['Price'], row['Call_Wall'], proximity_threshold): status.append("🧱 TECHO")
-            if check_proximity(row['Price'], row['Put_Wall'], proximity_threshold): status.append("🟢 PISO")
-            return " + ".join(status) if status else "OK"
-
-        df_display = df_table.copy()
-        df_display['Alerta'] = df_display.apply(get_alert_status, axis=1)
-        df_display['Sentimiento'] = df_display['PC_Ratio'].apply(get_sentiment_label)
+        df_show = df_table.copy()
+        df_show['Alerta'] = df_show.apply(get_alert, axis=1)
+        df_show['Sentimiento'] = df_show['PC_Ratio'].apply(get_sentiment_label)
         
-        df_display['% Techo'] = ((df_display['Call_Wall'] - df_display['Price']) / df_display['Price']) * 100
-        df_display['% Piso'] = ((df_display['Put_Wall'] - df_display['Price']) / df_display['Price']) * 100
-
-        col_filter1, col_filter2 = st.columns([1, 4])
-        with col_filter1:
-            show_only_alerts = st.checkbox("🔥 Mostrar solo Alertas", value=False)
+        # Filtros visuales
+        col_f1, col_f2 = st.columns([1, 4])
+        with col_f1:
+            only_alerts = st.checkbox("🔥 Solo Alertas", value=False)
         
-        if show_only_alerts:
-            df_final = df_display[df_display['Alerta'] != "OK"]
+        if only_alerts:
+            df_final = df_show[df_show['Alerta'] != "OK"]
         else:
-            df_final = df_display.sort_values(by=['Alerta', 'Ticker'], ascending=[False, True])
+            df_final = df_show.sort_values(by=['Alerta', 'Ticker'], ascending=[False, True])
 
+        # Tabla Principal
         st.dataframe(
-            df_final[['Ticker', 'Price', 'Max_Pain', 'Alerta', 'Call_Wall', '% Techo', 'Put_Wall', '% Piso', 'Sentimiento']],
+            df_final[['Ticker', 'Price', 'Max_Pain', 'Alerta', 'Call_Wall', 'Put_Wall', 'Sentimiento']],
             column_config={
-                "Ticker": "Activo", 
+                "Ticker": "Activo",
                 "Price": st.column_config.NumberColumn("Precio", format="$%.2f"),
                 "Max_Pain": st.column_config.NumberColumn("Max Pain", format="$%.2f"),
-                "Alerta": st.column_config.TextColumn("Estado"),
                 "Call_Wall": st.column_config.NumberColumn("Techo", format="$%.2f"),
-                "% Techo": st.column_config.NumberColumn("Dist. Techo %", format="%.2f%%"),
-                "Put_Wall": st.column_config.NumberColumn("Piso", format="$%.2f"),
-                "% Piso": st.column_config.NumberColumn("Dist. Piso %", format="%.2f%%"),
+                "Put_Wall": st.column_config.NumberColumn("Piso", format="$%.2f")
             },
-            use_container_width=True, hide_index=True, height=600
+            use_container_width=True, hide_index=True, height=500
         )
-    else: st.error("No se pudieron recuperar datos. Yahoo ha bloqueado temporalmente la IP del servidor. Intenta en 10 minutos.")
+    else:
+        st.warning("El escaneo no devolvió datos válidos. Intenta con otro lote.")
 
-    # --- DETALLE ---
+    # --- DETALLE INDIVIDUAL ---
     st.divider()
-    st.subheader("2️⃣ Análisis Profundo")
-    ticker_options = sorted([r['Ticker'] for r in results])
-    if ticker_options:
-        selected_ticker = st.selectbox("Selecciona Activo:", ticker_options)
-        asset_data = next((i for i in results if i["Ticker"] == selected_ticker), None)
+    st.subheader("🔍 Microscopio de Gamma")
+    
+    opts = sorted([r['Ticker'] for r in results])
+    if opts:
+        sel = st.selectbox("Seleccionar Activo:", opts)
+        dat = next((r for r in results if r['Ticker'] == sel), None)
         
-        if asset_data:
-            if asset_data['Data_Quality'] == 'ERROR_PRECIO':
-                st.error(f"🚨 **ERROR DE PRECIO:** Yahoo reporta ${asset_data['Price']:.2f} pero el mercado de opciones apunta a ${asset_data['Max_Pain']:.2f}.")
-
-            k1, k2, k3, k4, k5 = st.columns(5)
+        if dat:
+            # Enlaces
+            l_y, l_t = generate_links(sel)
+            st.markdown(f"🔗 [Yahoo Finance]({l_y}) | [TradingView]({l_t})")
             
-            dist_max_pain = ((asset_data['Max_Pain'] - asset_data['Price']) / asset_data['Price']) * 100
-            dist_techo = ((asset_data['Call_Wall'] - asset_data['Price']) / asset_data['Price']) * 100
-            dist_piso = ((asset_data['Put_Wall'] - asset_data['Price']) / asset_data['Price']) * 100
-
-            k1.metric("Precio", f"${asset_data['Price']:.2f}")
-            k2.metric("Max Pain (Imán)", f"${asset_data['Max_Pain']:.2f}", delta=f"{dist_max_pain:.1f}%", delta_color="off")
-            k3.metric("Sentimiento", get_sentiment_label(asset_data['PC_Ratio']), delta=f"Ratio: {asset_data['PC_Ratio']:.2f}")
-            k4.metric("Techo (Resistencia)", f"${asset_data['Call_Wall']:.2f}", delta=f"{dist_techo:.1f}%", delta_color="normal")
-            k5.metric("Piso (Soporte)", f"${asset_data['Put_Wall']:.2f}", delta=f"{dist_piso:.1f}%", delta_color="normal")
-
+            # Métricas
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Precio", f"${dat['Price']:.2f}")
+            k2.metric("Max Pain", f"${dat['Max_Pain']:.2f}")
+            k3.metric("Ratio P/C", f"{dat['PC_Ratio']:.2f}")
+            k4.metric("Techo", f"${dat['Call_Wall']:.2f}")
+            k5.metric("Piso", f"${dat['Put_Wall']:.2f}")
+            
+            # Gráficos
             c1, c2 = st.columns([1, 2])
             with c1:
-                labels = ['Calls', 'Puts']
-                values = [asset_data['Call_OI'], asset_data['Put_OI']]
-                fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.4, marker=dict(colors=['#00CC96', '#EF553B']))])
-                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250, showlegend=False)
+                fig_pie = go.Figure(data=[go.Pie(labels=['Calls', 'Puts'], values=[dat['Call_OI'], dat['Put_OI']], hole=.4)])
+                fig_pie.update_layout(height=250, margin=dict(t=0,b=0,l=0,r=0), showlegend=False)
                 st.plotly_chart(fig_pie, use_container_width=True)
-                
-            with c2:
-                calls, puts = asset_data['Calls_DF'], asset_data['Puts_DF']
-                center_price = asset_data['Calculated_Price_Ref']
-                min_s, max_s = center_price * 0.85, center_price * 1.15
-                c_filt = calls[(calls['strike'] >= min_s) & (calls['strike'] <= max_s)]
-                p_filt = puts[(puts['strike'] >= min_s) & (puts['strike'] <= max_s)]
-                
-                fig_wall = go.Figure()
-                fig_wall.add_trace(go.Bar(x=c_filt['strike'], y=c_filt['openInterest'], name='Calls (Techo)', marker_color='#00CC96'))
-                fig_wall.add_trace(go.Bar(x=p_filt['strike'], y=p_filt['openInterest'], name='Puts (Piso)', marker_color='#EF553B'))
-                
-                if asset_data['Data_Quality'] == "OK":
-                    fig_wall.add_vline(x=asset_data['Price'], line_dash="dash", line_color="white", annotation_text="Precio")
-                fig_wall.add_vline(x=asset_data['Max_Pain'], line_dash="dash", line_color="yellow", annotation_text="Max Pain")
-                
-                fig_wall.update_layout(barmode='overlay', height=350, margin=dict(t=20), xaxis_title="Strike ($)", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                st.plotly_chart(fig_wall, use_container_width=True)
             
-            link_yahoo, link_tv = generate_links(selected_ticker)
-            st.markdown(f"[Auditar en Yahoo]({link_yahoo}) | [Ver Gráfico]({link_tv})")
-
-else:
-    st.info("Dale al botón 'ESCANEAR' en la barra lateral.")
+            with c2:
+                # Graficar Muros
+                c_df, p_df = dat['Calls_DF'], dat['Puts_DF']
+                pr = dat['Price']
+                # Zoom inteligente (20% arriba y abajo del precio)
+                c_filt = c_df[(c_df['strike'] > pr*0.8) & (c_df['strike'] < pr*1.2)]
+                p_filt = p_df[(p_df['strike'] > pr*0.8) & (p_df['strike'] < pr*1.2)]
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=c_filt['strike'], y=c_filt['openInterest'], name='Calls', marker_color='#00CC96'))
+                fig.add_trace(go.Bar(x=p_filt['strike'], y=p_filt['openInterest'], name='Puts', marker_color='#EF553B'))
+                fig.add_vline(x=pr, line_dash="dash", line_color="white", annotation_text="Precio")
+                fig.add_vline(x=dat['Max_Pain'], line_dash="dash", line_color="yellow", annotation_text="Max Pain")
+                fig.update_layout(barmode='overlay', height=350, margin=dict(t=20))
+                st.plotly_chart(fig, use_container_width=True)
