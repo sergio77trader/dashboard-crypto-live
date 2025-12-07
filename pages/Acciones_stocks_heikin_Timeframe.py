@@ -65,7 +65,7 @@ def get_candle_status(df_ha):
     if df_ha.empty: return "N/A"
     try:
         last = df_ha.iloc[-1]
-        return "🟢 ALCISTA" if last['HA_Close'] > last['HA_Open'] else "🔴 BAJISTA"
+        return "🟢" if last['HA_Close'] > last['HA_Open'] else "🔴" # Simplificado solo icono para ahorrar espacio
     except:
         return "N/A"
 
@@ -152,11 +152,23 @@ def process_market_matrix(tickers):
                     df_1m = df_daily.resample('M').agg(logic).dropna()
                     
                 ha_1m = calculate_heikin_ashi(df_1m)
+                
+                # 1. Estado Mes Actual (Para el puntaje)
                 row['Mensual'] = get_candle_status(ha_1m)
+                
+                # 2. Estado Mes ANTERIOR (Informativo)
+                # Buscamos la penúltima fila (iloc -2)
+                if len(ha_1m) >= 2:
+                    prev_month = ha_1m.iloc[-2]
+                    row['Mes_Prev'] = "🟢" if prev_month['HA_Close'] > prev_month['HA_Open'] else "🔴"
+                else:
+                    row['Mes_Prev'] = "N/A"
+
             else:
                 row['Diario'] = "N/A"
                 row['Semanal'] = "N/A"
                 row['Mensual'] = "N/A"
+                row['Mes_Prev'] = "N/A"
         
         except Exception:
             row['1H'] = "Error"
@@ -169,13 +181,14 @@ def process_market_matrix(tickers):
 
 # --- INTERFAZ ---
 st.title("🏙️ SystemaTrader: Wall Street Heikin Ashi Matrix (Pro)")
-st.markdown(f"Monitor de Tendencia Multi-Timeframe (1H a Mensual). Universo: **{len(TICKERS_DB)} Activos**.")
+st.markdown(f"Monitor de Tendencia Multi-Timeframe. Universo: **{len(TICKERS_DB)} Activos**.")
 
 if st.button("🚀 ESCANEAR TENDENCIAS (BULK)", type="primary"):
     df_results = process_market_matrix(TICKERS_DB)
     
     if not df_results.empty:
         # --- LÓGICA DE DIAGNÓSTICO (SCORE 0-5) ---
+        # IMPORTANTE: NO incluimos 'Mes_Prev' en la lista de chequeo
         def check_alignment(row):
             cols_to_check = ['1H', '4H', 'Diario', 'Semanal', 'Mensual']
             greens = sum([1 for col in cols_to_check if "🟢" in str(row.get(col, ''))])
@@ -211,11 +224,18 @@ if st.button("🚀 ESCANEAR TENDENCIAS (BULK)", type="primary"):
         else:
             df_show = df_results
 
+        # Configuramos la visualización para incluir la nueva columna
         st.dataframe(
             df_show,
             column_config={
                 "Activo": st.column_config.TextColumn("Ticker", width="small"),
                 "Diagnóstico": st.column_config.TextColumn("Estado", width="medium"),
+                "1H": st.column_config.TextColumn("1H", width="small"),
+                "4H": st.column_config.TextColumn("4H", width="small"),
+                "Diario": st.column_config.TextColumn("D", width="small"),
+                "Semanal": st.column_config.TextColumn("W", width="small"),
+                "Mensual": st.column_config.TextColumn("M (Act)", width="small"),
+                "Mes_Prev": st.column_config.TextColumn("M (Ant)", width="small"), # NUEVA COLUMNA
             },
             use_container_width=True,
             hide_index=True,
