@@ -1,225 +1,183 @@
 import streamlit as st
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import time
 import numpy as np
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader - Deep Matrix")
+st.set_page_config(layout="wide", page_title="SystemaTrader - OI Deep Dive")
 
 st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 16px; }
-    .stProgress > div > div > div > div { background-color: #00CC96; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FACTORY DE CONEXIÓN ---
-def get_exchange(name):
-    opts = {'enableRateLimit': True, 'timeout': 30000}
-    if name == 'Gate.io':
-        return ccxt.gate(dict(opts, **{'options': {'defaultType': 'swap'}}))
-    elif name == 'MEXC':
-        return ccxt.mexc(dict(opts, **{'options': {'defaultType': 'swap'}}))
-    elif name == 'KuCoin':
-        return ccxt.kucoinfutures(opts)
-    elif name == 'Binance': # Solo funcionará local, no en cloud
-        return ccxt.binance(dict(opts, **{'options': {'defaultType': 'future'}}))
-    return None
-
-# --- FUNCIONES MATEMÁTICAS ---
-def calculate_rsi(df, length=14):
-    if df.empty or len(df) < length: return 50.0
-    try:
-        val = df.ta.rsi(length=length).iloc[-1]
-        return float(val) if not pd.isna(val) else 50.0
-    except: return 50.0
-
-def get_change_pct(df):
-    """Calcula cambio % de la última vela"""
-    if df.empty: return 0.0
-    try:
-        # (Cierre - Apertura) / Apertura
-        open_p = df['open'].iloc[-1]
-        close_p = df['close'].iloc[-1]
-        if open_p == 0: return 0.0
-        return ((close_p - open_p) / open_p) * 100
-    except: return 0.0
-
-def get_volume_usd(df):
-    """Calcula volumen en USD de la última vela"""
-    if df.empty: return 0.0
-    try:
-        # En futuros, vol suele ser en moneda base, multiplicamos por cierre
-        vol = df['vol'].iloc[-1]
-        close = df['close'].iloc[-1]
-        return vol * close
-    except: return 0.0
+# --- MOTOR DE DATOS (GATE.IO EXCLUSIVO) ---
+# Usamos Gate.io porque es de los pocos que permite bajar HISTORIAL de OI gratis y sin bloqueo
+@st.cache_resource
+def get_exchange():
+    return ccxt.gate({
+        'enableRateLimit': True,
+        'options': {'defaultType': 'swap'}, # Futuros Perpetuos
+        'timeout': 30000
+    })
 
 @st.cache_data(ttl=600)
-def get_targets(exchange_name, limit=10):
-    """Obtiene Top monedas por volumen"""
+def get_top_vol_pairs(limit=15):
+    """Obtiene el Top de monedas por volumen en Gate"""
     try:
-        exchange = get_exchange(exchange_name)
+        exchange = get_exchange()
         tickers = exchange.fetch_tickers()
         valid = []
+        
         for s in tickers:
-            if '/USDT' in s and tickers[s]['quoteVolume']:
-                valid.append({'symbol': s, 'vol': tickers[s]['quoteVolume']})
+            # Filtro: USDT y Swap (Perpetuo)
+            if '_USDT' in s: # Gate usa guión bajo BTC_USDT
+                valid.append({
+                    'symbol': s,
+                    'vol': tickers[s]['quoteVolume']
+                })
         
         df = pd.DataFrame(valid).sort_values('vol', ascending=False).head(limit)
         return df['symbol'].tolist()
-    except:
-        return ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT']
+    except Exception as e:
+        # Fallback de emergencia
+        return ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'ORDI_USDT', 'DOGE_USDT']
 
-def fetch_deep_data(symbols, exchange_name):
-    exchange = get_exchange(exchange_name)
+def fetch_oi_history(symbols):
+    exchange = get_exchange()
     data_rows = []
     
-    # Definimos qué temporalidades necesitamos para qué cosa
-    # Estructura: (Label Timeframe, CCXT Code, Calcular RSI?, Calcular Precio?, Calcular Volumen?)
-    TASKS = [
-        ('15m', '15m', True, False, False),  # Solo RSI
-        ('1H',  '1h',  True, True,  True),   # RSI + Precio + Vol
-        ('4H',  '4h',  True, True,  True),   # RSI + Precio + Vol
-        ('12H', '12h', True, True,  False),  # RSI + Precio (Volumen 12h a veces falla en APIs)
-        ('1D',  '1d',  True, True,  True),   # RSI + Precio + Vol
-        ('1W',  '1w',  True, False, False)   # Solo RSI
-    ]
-    
-    total_steps = len(symbols)
-    bar = st.progress(0, text="Iniciando escaneo profundo...")
+    prog = st.progress(0, text="Extrayendo Historial de Open Interest...")
+    total = len(symbols)
     
     for idx, symbol in enumerate(symbols):
-        clean_name = symbol.split(':')[0]
-        bar.progress((idx)/total_steps, text=f"Escaneando {clean_name} ({idx+1}/{total_steps})...")
+        clean_name = symbol.replace('_', '/')
+        prog.progress(idx/total, text=f"Analizando Flujo: {clean_name}...")
         
         row = {'Activo': clean_name}
         
-        # Iteramos sobre las temporalidades requeridas
-        for label, tf, calc_rsi, calc_price, calc_vol in TASKS:
-            try:
-                # Descargamos solo las velas necesarias (30 son suficientes para RSI y precio actual)
-                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=30)
-                df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','vol'])
+        try:
+            # 1. Obtenemos Historial de OI (Intervalo 1 Hora)
+            # Pedimos 30 datos para cubrir las últimas 24h
+            # Gate.io endpoint: fetch_open_interest_history
+            oi_hist = exchange.fetch_open_interest_history(symbol, timeframe='1h', limit=30)
+            
+            if not oi_hist or len(oi_hist) < 24:
+                # Si falla el historial, intentamos llenar con 0
+                row.update({'OI 1H %': 0, 'OI 4H %': 0, 'OI 1D %': 0, 'OI Actual ($)': 0})
+            else:
+                # El formato suele ser: [{'timestamp':..., 'openInterestValue':...}, ...]
+                # Convertimos a DataFrame para fácil manejo
+                df = pd.DataFrame(oi_hist)
                 
-                if calc_rsi:
-                    row[f'RSI {label}'] = calculate_rsi(df)
+                # Aseguramos que la columna sea float
+                # Gate suele devolver 'openInterestValue' (en USD) o 'openInterest' (en monedas)
+                col_oi = 'openInterestValue' if 'openInterestValue' in df.columns else 'openInterestAmount'
+                if col_oi not in df.columns: col_oi = 'openInterest' # Fallback
                 
-                if calc_price:
-                    row[f'Chg {label} %'] = get_change_pct(df)
-                    # Guardamos precio actual solo una vez (usamos el de 1H)
-                    if label == '1H':
-                        row['Precio'] = df['close'].iloc[-1]
+                # Limpieza de datos
+                current_oi = float(df[col_oi].iloc[-1])
                 
-                if calc_vol:
-                    row[f'Vol {label} ($)'] = get_volume_usd(df)
-                    
-            except Exception:
-                # Si falla una temporalidad, rellenamos con 0 para no romper la tabla
-                if calc_rsi: row[f'RSI {label}'] = 50.0
-                if calc_price: row[f'Chg {label} %'] = 0.0
-                if calc_vol: row[f'Vol {label} ($)'] = 0.0
-                if label == '1H' and 'Precio' not in row: row['Precio'] = 0.0
+                # --- CÁLCULOS DELTAS ---
+                # OI Actual
+                row['OI Actual ($)'] = current_oi
+                
+                # OI Hace 1 Hora (Penúltimo dato)
+                oi_1h = float(df[col_oi].iloc[-2])
+                row['OI 1H %'] = ((current_oi - oi_1h) / oi_1h) * 100 if oi_1h else 0
+                
+                # OI Hace 4 Horas (Indice -5)
+                if len(df) >= 5:
+                    oi_4h = float(df[col_oi].iloc[-5])
+                    row['OI 4H %'] = ((current_oi - oi_4h) / oi_4h) * 100 if oi_4h else 0
+                else: row['OI 4H %'] = 0
+                
+                # OI Hace 24 Horas (Indice -25)
+                if len(df) >= 25:
+                    oi_24h = float(df[col_oi].iloc[-25])
+                    row['OI 1D %'] = ((current_oi - oi_24h) / oi_24h) * 100 if oi_24h else 0
+                else: row['OI 1D %'] = 0
+
+            data_rows.append(row)
+            
+        except Exception:
+            # Si falla un activo, ponemos ceros para no romper la tabla
+            row.update({'OI 1H %': 0, 'OI 4H %': 0, 'OI 1D %': 0, 'OI Actual ($)': 0})
+            data_rows.append(row)
         
-        data_rows.append(row)
-        # Pausa para evitar baneo
-        time.sleep(0.1)
+        # Pausa para evitar Rate Limit de Gate
+        time.sleep(0.2)
         
-    bar.empty()
+    prog.empty()
     return pd.DataFrame(data_rows)
 
-# --- FRONTEND ---
-st.title("🧩 SystemaTrader: Deep Matrix")
-st.markdown("### Análisis Multi-Timeframe (Precio | Volumen | RSI)")
+# --- INTERFAZ ---
+st.title("🧩 SystemaTrader: Open Interest Matrix")
+st.markdown("### Flujo de Dinero Institucional (Gate.io Source)")
 
 with st.sidebar:
-    st.header("Motor de Datos")
-    SOURCE = st.selectbox("Exchange:", ["Gate.io", "MEXC", "KuCoin", "Binance"])
-    if SOURCE == "Binance":
-        st.warning("⚠️ Binance probablemente fallará en la nube (Error 451). Úsalo solo en local.")
-        
+    st.header("Configuración")
     LIMIT = st.slider("Cantidad de Activos:", 5, 20, 10)
-    st.caption("Nota: Más activos = Más tiempo de carga (aprox 1s por activo).")
     
-    if st.button("🔄 EJECUTAR ANÁLISIS", type="primary"):
+    if st.button("🔄 ANALIZAR FLUJO", type="primary"):
         st.cache_data.clear()
         st.rerun()
+    
+    st.info("Nota: Usamos Gate.io porque permite descargar el historial de OI sin bloqueo de región.")
 
 # --- EJECUCIÓN ---
 try:
-    with st.spinner(f"Obteniendo Top {LIMIT} activos de {SOURCE}..."):
-        targets = get_targets(SOURCE, LIMIT)
+    with st.spinner("Conectando con Gate.io Futures..."):
+        targets = get_top_vol_pairs(LIMIT)
         
     if not targets:
-        st.error("No se pudo conectar. Cambia de Exchange.")
+        st.error("Error de conexión.")
     else:
-        df = fetch_deep_data(targets, SOURCE)
+        df = fetch_oi_history(targets)
         
         if not df.empty:
-            # SANITIZACIÓN (Anti-Crash)
+            # SANITIZACIÓN FINAL
             df = df.fillna(0)
-            df = df.replace([np.inf, -np.inf], 0)
             
-            # --- TABLA DE PRECIOS Y CAMBIOS ---
-            st.subheader("1. Estructura de Precio (%)")
-            st.dataframe(
-                df[['Activo', 'Precio', 'Chg 1H %', 'Chg 4H %', 'Chg 12H %', 'Chg 1D %']],
-                column_config={
-                    "Precio": st.column_config.NumberColumn(format="$%.4f"),
-                    "Chg 1H %": st.column_config.NumberColumn(format="%.2f%%"),
-                    "Chg 4H %": st.column_config.NumberColumn(format="%.2f%%"),
-                    "Chg 12H %": st.column_config.NumberColumn(format="%.2f%%"),
-                    "Chg 1D %": st.column_config.NumberColumn(format="%.2f%%"),
-                },
-                use_container_width=True, hide_index=True
-            )
-            
-            st.divider()
-            
-            # --- TABLA DE RSI MULTI-TF ---
-            st.subheader("2. Matriz de Momentum (RSI)")
-            
-            # Estilo condicional para RSI
-            def color_rsi(val):
-                color = 'white'
-                if val >= 70: color = '#ff4b4b' # Rojo
-                elif val <= 30: color = '#00cc96' # Verde
-                return f'color: {color}; font-weight: bold'
+            # Formato Condicional (Colores)
+            # Pandas Styler para colorear los % de cambio
+            def color_change(val):
+                if val > 5: return 'color: #00FF00; font-weight: bold' # Verde fuerte si sube mucho
+                elif val > 0: return 'color: #90EE90' # Verde suave
+                elif val < -5: return 'color: #FF4500; font-weight: bold' # Rojo fuerte si baja mucho
+                elif val < 0: return 'color: #FA8072' # Rojo suave
+                return 'color: white'
 
-            # Aplicamos estilo (Pandas Styler no siempre va bien en streamlit interactive, 
-            # así que usamos visualización nativa con config)
+            # TABLA
             st.dataframe(
-                df[['Activo', 'RSI 15m', 'RSI 1H', 'RSI 4H', 'RSI 12H', 'RSI 1D', 'RSI 1W']],
+                df.style.applymap(color_change, subset=['OI 1H %', 'OI 4H %', 'OI 1D %']),
                 column_config={
-                    "RSI 15m": st.column_config.NumberColumn(format="%.1f"),
-                    "RSI 1H": st.column_config.NumberColumn(format="%.1f"),
-                    "RSI 4H": st.column_config.NumberColumn(format="%.1f"),
-                    "RSI 12H": st.column_config.NumberColumn(format="%.1f"),
-                    "RSI 1D": st.column_config.NumberColumn(format="%.1f"),
-                    "RSI 1W": st.column_config.NumberColumn(format="%.1f"),
+                    "Activo": st.column_config.TextColumn("Ticker", width="small"),
+                    "OI Actual ($)": st.column_config.ProgressColumn(
+                        "Open Interest Total", 
+                        format="$%.0f", 
+                        min_value=0, 
+                        max_value=float(df['OI Actual ($)'].max())
+                    ),
+                    "OI 1H %": st.column_config.NumberColumn("Cambio 1H", format="%.2f%%"),
+                    "OI 4H %": st.column_config.NumberColumn("Cambio 4H", format="%.2f%%"),
+                    "OI 1D %": st.column_config.NumberColumn("Cambio 24H", format="%.2f%%"),
                 },
-                use_container_width=True, hide_index=True
+                use_container_width=True,
+                height=600
             )
-            st.caption("🔴 Sobrecompra (>70) | 🟢 Sobreventa (<30)")
             
-            st.divider()
+            st.caption("""
+            **Interpretación SystemaTrader:**
+            *   **OI sube + Precio sube:** Tendencia Saludable (Entra dinero).
+            *   **OI sube + Precio baja:** Short Build-up (Acumulación de ventas).
+            *   **OI baja drásticamente:** Liquidaciones (Short/Long Squeeze).
+            """)
             
-            # --- TABLA DE VOLUMEN ---
-            st.subheader("3. Flujo de Volumen ($ USD)")
-            st.dataframe(
-                df[['Activo', 'Vol 1H ($)', 'Vol 4H ($)', 'Vol 1D ($)']],
-                column_config={
-                    "Vol 1H ($)": st.column_config.ProgressColumn(format="$%.0f", min_value=0, max_value=float(df['Vol 1H ($)'].max())),
-                    "Vol 4H ($)": st.column_config.ProgressColumn(format="$%.0f", min_value=0, max_value=float(df['Vol 4H ($)'].max())),
-                    "Vol 1D ($)": st.column_config.ProgressColumn(format="$%.0f", min_value=0, max_value=float(df['Vol 1D ($)'].max())),
-                },
-                use_container_width=True, hide_index=True
-            )
-
         else:
-            st.error("No llegaron datos.")
+            st.warning("No se obtuvieron datos.")
 
 except Exception as e:
-    st.error(f"Error de ejecución: {e}")
+    st.error(f"Error crítico: {e}")
