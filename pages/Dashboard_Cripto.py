@@ -5,17 +5,18 @@ import pandas_ta as ta
 import time
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader - Pro Dash")
+st.set_page_config(layout="wide", page_title="SystemaTrader - Pro Dashboard")
 
 st.markdown("""
 <style>
     [data-testid="stMetricValue"] { font-size: 18px; }
+    .stProgress > div > div > div > div { background-color: #00CC96; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- FUNCIONES TÉCNICAS ---
 def get_rsi(df, length=14):
-    """Calcula RSI con manejo de errores"""
+    """Calcula RSI seguro"""
     if df.empty or len(df) < length: return 50
     try:
         rsi_series = df.ta.rsi(length=length)
@@ -23,46 +24,62 @@ def get_rsi(df, length=14):
         return rsi_series.iloc[-1]
     except: return 50
 
-@st.cache_data(ttl=600)
-def get_top_pairs_kucoin():
-    """Obtiene Top 15 pares de KuCoin Futures por volumen"""
+# --- FACTORY DE CONEXIÓN ---
+def get_exchange(name):
+    """Genera la conexión según el exchange elegido"""
+    opts = {'enableRateLimit': True, 'timeout': 30000}
+    if name == 'Gate.io':
+        return ccxt.gate(dict(opts, **{'options': {'defaultType': 'swap'}}))
+    elif name == 'MEXC':
+        return ccxt.mexc(dict(opts, **{'options': {'defaultType': 'swap'}}))
+    elif name == 'KuCoin':
+        return ccxt.kucoinfutures(opts)
+    return None
+
+@st.cache_data(ttl=300)
+def get_top_pairs(exchange_name):
+    """Obtiene Top 15 pares por volumen del exchange seleccionado"""
     try:
-        exchange = ccxt.kucoinfutures()
+        exchange = get_exchange(exchange_name)
         markets = exchange.load_markets()
+        
+        # Obtener tickers para ver volumen
         tickers = exchange.fetch_tickers()
-        
         valid = []
-        for s in tickers:
-            # Filtro: USDT, Activo y Swap
-            if '/USDT:USDT' in s: 
-                vol = tickers[s]['quoteVolume'] if tickers[s]['quoteVolume'] else 0
-                valid.append({'symbol': s, 'volume': vol})
         
-        # Ordenar y tomar Top 15
+        for s in tickers:
+            # Filtro universal de perpetuos USDT
+            is_usdt = '/USDT' in s
+            # Gate/MEXC usan 'swap' o 'linear', Kucoin usa otra logica.
+            # CCXT suele normalizar, buscamos pares USDT con volumen
+            if is_usdt and tickers[s]['quoteVolume'] is not None:
+                valid.append({
+                    'symbol': s,
+                    'volume': tickers[s]['quoteVolume']
+                })
+        
+        # Ordenar y Top 15
         df = pd.DataFrame(valid)
         df = df.sort_values('volume', ascending=False).head(15)
         return df['symbol'].tolist()
-    except:
-        # Fallback si falla la API
-        return ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT', 'DOGE/USDT:USDT', 'PEPE/USDT:USDT']
+    except Exception as e:
+        # Fallback si falla la lista
+        return ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT']
 
-def fetch_market_data(symbols):
-    exchange = ccxt.kucoinfutures({
-        'enableRateLimit': True, 
-        'timeout': 30000
-    })
-    
+def fetch_data(symbols, exchange_name):
+    exchange = get_exchange(exchange_name)
     data_rows = []
     total = len(symbols)
-    bar = st.progress(0, text="Extrayendo datos de KuCoin...")
+    bar = st.progress(0, text=f"Leyendo datos de {exchange_name}...")
     
     for i, symbol in enumerate(symbols):
-        display_name = symbol.replace(':USDT', '').replace('/USDT', '')
-        bar.progress((i)/total, text=f"Analizando {display_name}...")
+        # Nombre limpio para mostrar
+        display = symbol.split(':')[0]
+        bar.progress((i)/total, text=f"Analizando {display}...")
         
         try:
             # 1. Velas para RSI (15m, 1h, 4h)
-            # KuCoin es estricto, pedimos pocas velas
+            # Optimizacion: Pedimos pocas velas
             k_15m = exchange.fetch_ohlcv(symbol, '15m', limit=30)
             rsi_15m = get_rsi(pd.DataFrame(k_15m, columns=['t','o','h','l','c','v']))
             
@@ -74,34 +91,45 @@ def fetch_market_data(symbols):
             k_4h = exchange.fetch_ohlcv(symbol, '4h', limit=30)
             rsi_4h = get_rsi(pd.DataFrame(k_4h, columns=['t','o','h','l','c','v']))
             
-            # 2. Datos Financieros (Funding & OI)
-            funding_dict = exchange.fetch_funding_rate(symbol)
-            funding_rate = funding_dict['fundingRate'] * 100
+            # 2. Datos Financieros
+            funding = 0.0
+            try:
+                f_data = exchange.fetch_funding_rate(symbol)
+                funding = f_data['fundingRate'] * 100
+            except: pass
             
-            # Open Interest
-            # KuCoin a veces devuelve value directo, a veces contracts
-            oi_dict = exchange.fetch_open_interest(symbol)
+            # 3. Open Interest
             oi_usd = 0
-            if 'openInterestValue' in oi_dict:
-                oi_usd = float(oi_dict['openInterestValue'])
-            else:
-                oi_usd = float(oi_dict['openInterest']) * price_now
+            try:
+                oi = exchange.fetch_open_interest(symbol)
+                # Intentar buscar valor en USD directo
+                if 'openInterestValue' in oi:
+                    oi_usd = float(oi['openInterestValue'])
+                # Si no, convertir contratos a USD
+                elif 'openInterestAmount' in oi:
+                     oi_usd = float(oi['openInterestAmount']) * price_now
+                else:
+                     oi_usd = float(oi.get('openInterest', 0)) * price_now
+            except: pass
 
-            # Ticker para cambio 24h
-            ticker_info = exchange.fetch_ticker(symbol)
-            chg_24h = ticker_info['percentage']
-            vol_24h = ticker_info['quoteVolume']
+            # 4. Variación 24h
+            try:
+                tick = exchange.fetch_ticker(symbol)
+                chg = tick['percentage'] if tick['percentage'] else 0
+                # Normalizar si viene en decimal o entero
+                if abs(chg) < 1: chg = chg * 100 # Si viene 0.05 es 5%
+            except: chg = 0
 
             row = {
-                'Symbol': display_name,
+                'Symbol': display,
                 'Precio': price_now,
-                'Chg 24h': chg_24h / 100 if abs(chg_24h) > 1 else chg_24h, # Normalizar a decimal
-                'Volumen': vol_24h,
+                'Chg 24h': chg / 100, # Streamlit lo multiplica por 100 si es formato %
+                'Volumen': tick.get('quoteVolume', 0),
                 'RSI 15m': rsi_15m,
                 'RSI 1H': rsi_1h,
                 'RSI 4H': rsi_4h,
-                'Funding Rate': funding_rate,
-                'Open Interest ($)': oi_usd
+                'Funding': funding / 100, # Formato %
+                'OI ($)': oi_usd
             }
             data_rows.append(row)
             
@@ -111,46 +139,60 @@ def fetch_market_data(symbols):
     bar.empty()
     return pd.DataFrame(data_rows)
 
-# --- FRONTEND ---
+# --- INTERFAZ ---
 st.title("💠 SystemaTrader: Pro Dashboard")
-st.markdown("### Inteligencia de Mercado (Motor KuCoin)")
 
-if st.button("🔄 ACTUALIZAR MATRIZ", type="primary"):
-    st.cache_data.clear()
+# BARRA LATERAL: SELECTOR DE MOTOR
+with st.sidebar:
+    st.header("Fuente de Datos")
+    # Gate.io suele ser el más robusto para IPs de Cloud
+    SOURCE = st.selectbox("Seleccionar Exchange:", ["Gate.io", "MEXC", "KuCoin"])
+    
+    if st.button("🔄 RECARGAR AHORA", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
 
-# Ejecución
+    st.info(f"Conectado a: **{SOURCE} Futures**")
+    st.caption("Si falla la carga, cambia de Exchange en este menú.")
+
+# EJECUCIÓN PRINCIPAL
 try:
-    top_symbols = get_top_pairs_kucoin()
-    df = fetch_market_data(top_symbols)
-
-    if not df.empty:
-        # Coloreado condicional de RSI
-        st.dataframe(
-            df,
-            column_config={
-                "Symbol": st.column_config.TextColumn("Crypto", width="small"),
-                "Precio": st.column_config.NumberColumn("Precio", format="$%.4f"),
-                "Chg 24h": st.column_config.NumberColumn("Cambio 24h", format="%.2f%%"),
-                "Volumen": st.column_config.ProgressColumn("Volumen", format="$%.0f", min_value=0, max_value=df['Volumen'].max()),
-                "RSI 15m": st.column_config.NumberColumn("RSI 15m", format="%.1f"),
-                "RSI 1H": st.column_config.NumberColumn("RSI 1H", format="%.1f"),
-                "RSI 4H": st.column_config.NumberColumn("RSI 4H", format="%.1f"),
-                "Funding Rate": st.column_config.NumberColumn("Funding", format="%.4f%%"),
-                "Open Interest ($)": st.column_config.NumberColumn("OI ($)", format="$%.0f")
-            },
-            use_container_width=True,
-            hide_index=True,
-            height=700
-        )
+    with st.spinner(f"Estableciendo enlace satelital con {SOURCE}..."):
+        top_symbols = get_top_pairs(SOURCE)
         
-        st.divider()
-        c1, c2, c3 = st.columns(3)
-        c1.info("💡 **RSI:** >70 Sobrecompra | <30 Sobreventa")
-        c2.warning("⚡ **Funding:** Negativo = Posible Short Squeeze")
-        c3.success("💰 **Open Interest:** Dinero real en juego")
-        
+    if not top_symbols:
+        st.error(f"Error crítico conectando a {SOURCE}. Prueba otro Exchange.")
     else:
-        st.error("Error conectando con KuCoin. Intenta recargar.")
+        df = fetch_data(top_symbols, SOURCE)
+
+        if not df.empty:
+            # TABLA PRINCIPAL
+            st.dataframe(
+                df,
+                column_config={
+                    "Symbol": st.column_config.TextColumn("Activo", width="small"),
+                    "Precio": st.column_config.NumberColumn("Precio", format="$%.4f"),
+                    "Chg 24h": st.column_config.NumberColumn("24h %", format="%.2f%%"),
+                    "Volumen": st.column_config.ProgressColumn("Volumen 24h", format="$%.0f", min_value=0, max_value=df['Volumen'].max()),
+                    "RSI 15m": st.column_config.NumberColumn("RSI 15m", format="%.0f"),
+                    "RSI 1H": st.column_config.NumberColumn("RSI 1H", format="%.0f"),
+                    "RSI 4H": st.column_config.NumberColumn("RSI 4H", format="%.0f"),
+                    "Funding": st.column_config.NumberColumn("Funding", format="%.4f%%"),
+                    "OI ($)": st.column_config.NumberColumn("Open Int. ($)", format="$%.0f", help="Dinero en contratos abiertos")
+                },
+                use_container_width=True,
+                hide_index=True,
+                height=750
+            )
+            
+            # LEYENDA
+            c1, c2, c3 = st.columns(3)
+            c1.info("💡 **RSI:** >70 (Sobrecompra) | <30 (Sobreventa)")
+            c2.warning("⚡ **Funding:** Negativo = Posible Short Squeeze")
+            c3.success(f"📡 Datos en vivo de **{SOURCE}**")
+            
+        else:
+            st.error("No llegaron datos. Intenta recargar o cambiar de Exchange.")
 
 except Exception as e:
-    st.error(f"Error Crítico: {e}")
+    st.error(f"Error del Sistema: {e}")
