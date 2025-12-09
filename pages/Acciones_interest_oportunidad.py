@@ -4,14 +4,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import time
+import re
 
 # --- CONFIGURACIÓN VISUAL ---
 st.set_page_config(layout="wide", page_title="SystemaTrader - Lotes & Acumulación")
 
-# --- CORRECCIÓN DE ESTILOS CSS (Solución al recuadro negro) ---
+# --- ESTILOS CSS (Fondo transparente para métricas) ---
 st.markdown("""
 <style>
-    /* Hacemos que el fondo sea transparente y añadimos un borde sutil */
     div[data-testid="stMetric"] {
         background-color: transparent !important;
         border: 1px solid #cccccc;
@@ -19,17 +19,43 @@ st.markdown("""
         border-radius: 5px;
         color: inherit;
     }
+    div[data-testid="stMarkdownContainer"] p {
+        font-size: 1.05rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- BASE DE DATOS MAESTRA ---
-CEDEAR_DATABASE = sorted([
-    'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'TSLA', 'META', 'AMD', 'NFLX', 
-    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'MELI',
-    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'XOM', 'CVX', 'JPM', 'BAC', 'C', 'WFC',
-    'SPY', 'QQQ', 'IWM', 'EEM', 'XLE', 'XLF', 'GLD', 'SLV', 'ARKK', 'BIOX',
-    'INTC', 'QCOM', 'AVGO', 'CRM', 'UBER', 'ABNB', 'PLTR', 'TSM', 'COIN', 'MSTR'
-])
+# --- BASE DE DATOS MAESTRA (CEDEARS + ADRs + ETFs) ---
+# Seleccionados por liquidez en mercado de opciones USA
+DB_CATEGORIES = {
+    '🇦🇷 Argentina (ADRs)': [
+        'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 
+        'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI'
+    ],
+    '🇺🇸 Mag 7 & Big Tech': [
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NFLX', 
+        'AMD', 'INTC', 'QCOM', 'AVGO', 'CRM', 'ORCL', 'IBM', 'CSCO', 'UBER', 'ABNB', 'PLTR'
+    ],
+    '🇺🇸 ETFs & Índices': [
+        'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'XLE', 'XLF', 'ARKK', 'EWZ', 'GLD', 'SLV'
+    ],
+    '🇺🇸 Financiero & Bancos': [
+        'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ'
+    ],
+    '🇺🇸 Consumo & Industrial': [
+        'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'PG', 'JNJ', 
+        'PFE', 'MRK', 'XOM', 'CVX', 'BA', 'CAT', 'GE', 'MMM', 'DE', 'F', 'GM'
+    ],
+    '🌎 Brasil, China & Emergentes': [
+        'PBR', 'VALE', 'ITUB', 'BBD', 'BABA', 'JD', 'BIDU', 'NIO', 'TSM'
+    ],
+    '🪙 Crypto & Volatilidad': [
+        'COIN', 'MSTR', 'MARA', 'RIOT', 'HUT', 'BITF', 'HOOD'
+    ]
+}
+
+# Aplanamos la lista para los lotes y eliminamos duplicados
+CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
 # --- INICIALIZAR ESTADO (ACUMULADOR) ---
 if 'accumulated_data' not in st.session_state:
@@ -48,6 +74,7 @@ def check_proximity(price, wall_price, threshold_pct):
 
 def analyze_ticker_safe(ticker):
     """Analiza un solo ticker de forma segura y devuelve un dict completo"""
+    ticker = ticker.upper().strip()
     try:
         tk = yf.Ticker(ticker)
         
@@ -110,63 +137,84 @@ def analyze_ticker_safe(ticker):
     except Exception as e:
         return {'Ticker': ticker, 'Status': 'Error', 'Price': 0}
 
-# --- BARRA LATERAL (CONTROL DE LOTES) ---
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    proximity_threshold = st.slider("Alerta Proximidad (%)", 1, 10, 3)
-    
-    st.divider()
-    st.header("🎮 Control de Lotes")
-    st.info("Procesa por grupos pequeños para evitar bloqueos.")
-    
-    batch_size = st.slider("Tamaño del Lote", 1, 10, 10) # Default 10 como en tu imagen
-    
-    batches = [CEDEAR_DATABASE[i:i + batch_size] for i in range(0, len(CEDEAR_DATABASE), batch_size)]
-    batch_labels = [f"Lote {i+1}: {b[0]} ... {b[-1]}" for i, b in enumerate(batches)]
-    
-    sel_batch_idx = st.selectbox("Seleccionar Lote:", range(len(batches)), format_func=lambda x: batch_labels[x])
-    
-    col_btn1, col_btn2 = st.columns(2)
-    
-    scan_btn = col_btn1.button("▶️ ESCANEAR LOTE", type="primary")
-    clear_btn = col_btn2.button("🗑️ Limpiar Todo")
-    
-    if clear_btn:
-        st.session_state['accumulated_data'] = []
-        st.rerun()
-        
-    st.metric("Activos en Memoria", len(st.session_state['accumulated_data']))
-
-# --- LÓGICA DE ESCANEO ---
-if scan_btn:
-    targets = batches[sel_batch_idx]
+# --- FUNCIÓN DE ESCANEO REUTILIZABLE ---
+def run_scan_process(ticker_list):
     progress_bar = st.progress(0)
     status_text = st.empty()
     existing_tickers = [d.get('Ticker') for d in st.session_state['accumulated_data']]
     
-    for i, ticker in enumerate(targets):
-        if ticker in existing_tickers:
-            status_text.warning(f"{ticker} ya existe. Saltando...")
-            time.sleep(0.5)
-            continue
-            
-        status_text.markdown(f"⏳ Analizando **{ticker}**...")
+    # Filtramos los que ya existen para no perder tiempo, a menos que sea una lista muy corta
+    target_tickers = [t for t in ticker_list if t not in existing_tickers]
+    skipped = len(ticker_list) - len(target_tickers)
+    
+    if skipped > 0:
+        st.toast(f"Saltando {skipped} activos ya analizados...", icon="⏭️")
+
+    for i, ticker in enumerate(target_tickers):
+        status_text.markdown(f"🔎 Analizando **{ticker}**...")
+        
         data = analyze_ticker_safe(ticker)
         
         if data and 'Price' in data and data['Price'] > 0:
             st.session_state['accumulated_data'].append(data)
         
-        progress_bar.progress((i + 1) / len(targets))
-        time.sleep(1.5) # Pausa de seguridad
+        progress_bar.progress((i + 1) / len(target_tickers))
+        time.sleep(1.2) # Pausa de seguridad
         
-    status_text.success("✅ Lote finalizado.")
+    status_text.success("✅ Análisis finalizado.")
     time.sleep(1)
     status_text.empty()
     progress_bar.empty()
     st.rerun()
 
+# --- BARRA LATERAL ---
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    proximity_threshold = st.slider("Alerta Proximidad (%)", 1, 10, 3)
+    
+    st.divider()
+    
+    # --- SECCIÓN 1: LOTES AUTOMÁTICOS ---
+    st.header("📦 Escaneo por Lotes")
+    st.caption(f"Base de Datos: {len(CEDEAR_DATABASE)} Activos")
+    
+    batch_size = st.slider("Tamaño del Lote", 1, 10, 5) 
+    batches = [CEDEAR_DATABASE[i:i + batch_size] for i in range(0, len(CEDEAR_DATABASE), batch_size)]
+    batch_labels = [f"Lote {i+1}: {b[0]} ... {b[-1]}" for i, b in enumerate(batches)]
+    
+    sel_batch_idx = st.selectbox("Seleccionar Lote:", range(len(batches)), format_func=lambda x: batch_labels[x])
+    
+    if st.button("▶️ ESCANEAR LOTE SELECCIONADO", type="primary"):
+        run_scan_process(batches[sel_batch_idx])
+
+    st.divider()
+    
+    # --- SECCIÓN 2: PERSONALIZADO ---
+    st.header("🎯 Lista Personalizada")
+    custom_input = st.text_area("Ingresa tickers (sep. por coma):", placeholder="Ej: KO, MCD, NKE, GGAL")
+    
+    if st.button("▶️ ANALIZAR MI LISTA"):
+        if custom_input:
+            # Limpiar input (quitar espacios, comas, saltos de linea)
+            custom_list = [t.strip().upper() for t in re.split(r'[,\s\n]+', custom_input) if t.strip()]
+            if custom_list:
+                run_scan_process(custom_list)
+            else:
+                st.error("Lista vacía.")
+        else:
+            st.warning("Escribe al menos un ticker.")
+
+    st.divider()
+    
+    # --- LIMPIEZA ---
+    if st.button("🗑️ Borrar Resultados"):
+        st.session_state['accumulated_data'] = []
+        st.rerun()
+        
+    st.metric("Activos en Memoria", len(st.session_state['accumulated_data']))
+
 # --- VISTA PRINCIPAL ---
-st.title("SystemaTrader: Mercado Completo (Modo Seguro)")
+st.title("SystemaTrader: Scanner de Oportunidades")
 
 if st.session_state['accumulated_data']:
     df = pd.DataFrame(st.session_state['accumulated_data'])
@@ -184,11 +232,15 @@ if st.session_state['accumulated_data']:
         df['Dist. Techo %'] = ((df['Call_Wall'] - df['Price']) / df['Price'])
         df['Dist. Piso %'] = ((df['Put_Wall'] - df['Price']) / df['Price'])
         
-        ver_alertas = st.checkbox("🔥 Mostrar solo Alertas")
+        # Filtros Visuales
+        col_filtro1, col_filtro2 = st.columns([1, 4])
+        with col_filtro1:
+            ver_alertas = st.checkbox("🔥 Solo Alertas")
+        
         df_display = df[df['Estado'] != "OK"] if ver_alertas else df
 
         # --- TABLA ---
-        st.subheader("1. Escaneo Masivo Acumulado")
+        st.subheader("1. Resultados Acumulados")
         st.dataframe(
             df_display[['Ticker', 'Price', 'Max_Pain', 'Estado', 'Call_Wall', 'Dist. Techo %', 'Put_Wall', 'Dist. Piso %', 'Sentimiento']],
             column_config={
@@ -200,7 +252,7 @@ if st.session_state['accumulated_data']:
                 "Dist. Techo %": st.column_config.NumberColumn("Dist. Techo", format="%.2f %%"),
                 "Dist. Piso %": st.column_config.NumberColumn("Dist. Piso", format="%.2f %%"),
             },
-            use_container_width=True, hide_index=True, height=400
+            use_container_width=True, hide_index=True, height=450
         )
 
         # --- ANÁLISIS PROFUNDO ---
@@ -208,12 +260,12 @@ if st.session_state['accumulated_data']:
         st.subheader("2. Análisis Profundo")
         
         tickers_avail = sorted(df['Ticker'].tolist())
-        sel_ticker = st.selectbox("Selecciona Activo:", tickers_avail)
+        sel_ticker = st.selectbox("Selecciona Activo para Detalle:", tickers_avail)
         
         asset = next((item for item in st.session_state['accumulated_data'] if item["Ticker"] == sel_ticker), None)
         
         if asset:
-            # MÉTRICAS (Ahora se verán bien con el fondo transparente)
+            # MÉTRICAS
             c1, c2, c3, c4, c5 = st.columns(5)
             dist_pain = ((asset['Max_Pain'] - asset['Price']) / asset['Price']) * 100
             
@@ -243,6 +295,7 @@ if st.session_state['accumulated_data']:
                 puts_df = asset['Puts_DF']
                 
                 center = asset['Price']
+                # Rango dinámico del gráfico (+- 20% del precio)
                 mask_c = (calls_df['strike'] > center * 0.8) & (calls_df['strike'] < center * 1.2)
                 mask_p = (puts_df['strike'] > center * 0.8) & (puts_df['strike'] < center * 1.2)
                 
@@ -255,14 +308,14 @@ if st.session_state['accumulated_data']:
                 fig_wall.add_vline(x=asset['Put_Wall'], line_dash="dot", line_color="#FF5252")
                 fig_wall.add_vline(x=asset['Max_Pain'], line_dash="dash", line_color="orange", annotation_text="Max Pain")
                 
-                fig_wall.update_layout(barmode='overlay', height=350, margin=dict(t=20, b=0), xaxis_title="Strike", yaxis_title="Contratos (OI)", legend=dict(orientation="h", y=1.1))
+                fig_wall.update_layout(barmode='overlay', height=350, margin=dict(t=20, b=0), xaxis_title="Strike", yaxis_title="Interés Abierto", legend=dict(orientation="h", y=1.1))
                 st.plotly_chart(fig_wall, use_container_width=True)
                 
             st.info(f"""
             🧠 **Interpretación Táctica:**
-            1. **Imán (Max Pain ${asset['Max_Pain']:.2f}):** Precio objetivo teórico al vencimiento ({asset['Expiration']}).
+            1. **Imán (Max Pain ${asset['Max_Pain']:.2f}):** Precio teórico de vencimiento ({asset['Expiration']}).
             2. **Sentimiento:** {asset['Sentimiento']} (Ratio P/C: {asset['PC_Ratio']:.2f}).
             """)
 
 else:
-    st.info("👈 Selecciona un Lote en la barra lateral y presiona 'ESCANEAR' para comenzar a acumular datos.")
+    st.info("👈 Selecciona un **Lote** o usa la **Lista Personalizada** en el menú para comenzar.")
