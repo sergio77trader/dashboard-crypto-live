@@ -5,25 +5,54 @@ import pandas as pd
 # --- CONFIGURACIÓN ---
 st.set_page_config(layout="wide", page_title="SystemaTrader - Stocks HA Matrix Pro")
 
-# --- BASE DE DATOS MAESTRA (ADRs + CEDEARs en USD) ---
+# --- BASE DE DATOS MAESTRA (INSTITUCIONAL 99% VOLUMEN) ---
+# Se analizan los Tickers originales de NYSE/NASDAQ (en Dólares)
+# Esto cubre CEDEARs y ADRs Argentinos.
 TICKERS_DB = sorted([
     # --- ARGENTINA (ADRs) ---
-    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX',
-    # --- BIG TECH / AI / SEMIS ---
-    'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NFLX', 
-    'AMD', 'INTC', 'QCOM', 'AVGO', 'TSM', 'MU', 'ARM', 'SMCI', 'TXN', 'ADI',
-    # --- SOFTWARE / CLOUD / CYBER ---
-    'ADBE', 'CRM', 'ORCL', 'IBM', 'PLTR', 'SPOT', 'SHOP', 'SNOW', 'PANW', 'CRWD', 'SQ', 'PYPL', 'UBER', 'ABNB',
-    # --- CONSUMO / RETAIL ---
-    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'LOW', 'AMGN',
-    # --- FINANCIEROS ---
-    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B',
-    # --- INDUSTRIAL / ENERGIA / SALUD ---
-    'XOM', 'CVX', 'SLB', 'BA', 'CAT', 'MMM', 'GE', 'DE', 'F', 'GM', 'TM', 'JNJ', 'PFE', 'MRK', 'LLY',
-    # --- ETFS (Índices y Sectores) ---
-    'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'XLE', 'XLF', 'ARKK', 'EWZ', 'GLD', 'SLV',
-    # --- GLOBAL / CRYPTO / OTROS ---
-    'PBR', 'VALE', 'ITUB', 'BBD', 'BABA', 'JD', 'BIDU', 'COIN', 'MSTR', 'HUT', 'BITF', 'NGG'
+    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 
+    'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX',
+    
+    # --- MAGNIFICENT 7 & BIG TECH ---
+    'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NFLX',
+    
+    # --- SEMICONDUCTORES & AI ---
+    'AMD', 'INTC', 'QCOM', 'AVGO', 'TSM', 'MU', 'ARM', 'SMCI', 'TXN', 'ADI', 'ASML',
+    
+    # --- SOFTWARE, CLOUD & CYBER ---
+    'ADBE', 'CRM', 'ORCL', 'IBM', 'PLTR', 'SPOT', 'SHOP', 'SNOW', 'PANW', 
+    'CRWD', 'SQ', 'PYPL', 'UBER', 'ABNB', 'SAP',
+    
+    # --- FINANCIEROS (BANCOS & PAGOS) ---
+    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'BLK', 'COIN',
+    
+    # --- CONSUMO MASIVO & RETAIL ---
+    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 
+    'LOW', 'PG', 'CL', 'MO', 'PM',
+    
+    # --- SALUD & PHARMA (SECTOR DEFENSIVO) ---
+    'JNJ', 'PFE', 'MRK', 'LLY', 'ABBV', 'UNH', 'BMY', 'AZN', 'AMGN', 'GILD',
+    
+    # --- ENERGÍA, INDUSTRIA & MINERÍA ---
+    'XOM', 'CVX', 'SLB', 'OXY', 'HAL', # Petróleo
+    'BA', 'CAT', 'MMM', 'GE', 'DE', 'LMT', 'RTX', # Industria/Defensa
+    'F', 'GM', 'TM', 'HMC', # Autos
+    'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', # Minería (Oro/Cobre/Plata)
+    'VALE', 'PBR', 'RIO', 'BHP', # Commodities Globales
+    
+    # --- CHINA & BRASIL & EMERGENTES ---
+    'BABA', 'JD', 'BIDU', 'NIO', 'PDD', 'TCEHY', # China
+    'ITUB', 'BBD', 'ERJ', # Brasil
+    
+    # --- CRYPTO MINERS & PROXIES ---
+    'MSTR', 'MARA', 'RIOT', 'HUT', 'BITF', 'COIN',
+    
+    # --- ETFS (INDICES) ---
+    'SPY', 'QQQ', 'IWM', 'DIA', # Indices USA
+    'EEM', 'EWZ', 'FXI', # Emergentes
+    'XLE', 'XLF', 'XLV', 'XLI', 'XLK', # Sectores
+    'GLD', 'SLV', 'GDX', # Metales
+    'ARKK', 'SOXX' # Temáticos
 ])
 
 # --- MOTOR DE CÁLCULO ---
@@ -65,7 +94,7 @@ def get_candle_status(df_ha):
     if df_ha.empty: return "N/A"
     try:
         last = df_ha.iloc[-1]
-        return "🟢" if last['HA_Close'] > last['HA_Open'] else "🔴" # Simplificado solo icono para ahorrar espacio
+        return "🟢" if last['HA_Close'] > last['HA_Open'] else "🔴" 
     except:
         return "N/A"
 
@@ -85,7 +114,7 @@ def fetch_bulk_data(tickers):
 
 def process_market_matrix(tickers):
     # 1. Descarga Masiva
-    with st.spinner("📡 Conectando con Wall Street (Descarga Masiva)..."):
+    with st.spinner(f"📡 Conectando con Wall Street ({len(tickers)} Activos)..."):
         bulk_1h, bulk_1d = fetch_bulk_data(tickers)
     
     if bulk_1h is None or bulk_1d is None or bulk_1h.empty:
@@ -157,7 +186,6 @@ def process_market_matrix(tickers):
                 row['Mensual'] = get_candle_status(ha_1m)
                 
                 # 2. Estado Mes ANTERIOR (Informativo)
-                # Buscamos la penúltima fila (iloc -2)
                 if len(ha_1m) >= 2:
                     prev_month = ha_1m.iloc[-2]
                     row['Mes_Prev'] = "🟢" if prev_month['HA_Close'] > prev_month['HA_Open'] else "🔴"
@@ -181,14 +209,13 @@ def process_market_matrix(tickers):
 
 # --- INTERFAZ ---
 st.title("🏙️ SystemaTrader: Wall Street Heikin Ashi Matrix (Pro)")
-st.markdown(f"Monitor de Tendencia Multi-Timeframe. Universo: **{len(TICKERS_DB)} Activos**.")
+st.markdown(f"Monitor de Tendencia Multi-Timeframe. Universo: **{len(TICKERS_DB)} Activos Institucionales**.")
 
 if st.button("🚀 ESCANEAR TENDENCIAS (BULK)", type="primary"):
     df_results = process_market_matrix(TICKERS_DB)
     
     if not df_results.empty:
         # --- LÓGICA DE DIAGNÓSTICO (SCORE 0-5) ---
-        # IMPORTANTE: NO incluimos 'Mes_Prev' en la lista de chequeo
         def check_alignment(row):
             cols_to_check = ['1H', '4H', 'Diario', 'Semanal', 'Mensual']
             greens = sum([1 for col in cols_to_check if "🟢" in str(row.get(col, ''))])
