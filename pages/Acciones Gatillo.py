@@ -19,7 +19,7 @@ st.markdown("""
         border-radius: 8px;
         text-align: center;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        min-height: 160px; /* Altura uniforme */
+        min-height: 160px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -34,12 +34,7 @@ st.markdown("""
     .sub-info { font-size: 0.85rem; color: #666; margin-top: 5px; }
     
     .sentiment-tag {
-        font-weight: bold;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        display: inline-block;
-        margin-top: 5px;
+        font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; display: inline-block; margin-top: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -95,13 +90,12 @@ DB_CATEGORIES = {
 }
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- INICIALIZAR ESTADO (V6) ---
-if 'st360_db_v6' not in st.session_state:
-    st.session_state['st360_db_v6'] = []
+# --- INICIALIZAR ESTADO (V7 - Tolerante a Fallos) ---
+if 'st360_db_v7' not in st.session_state:
+    st.session_state['st360_db_v7'] = []
 
 # --- MOTOR DE CÁLCULO ---
 
-# 1. TÉCNICO MULTI-TEMPORAL
 def calculate_ha_candle(df):
     if df.empty: return False
     ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
@@ -114,7 +108,7 @@ def get_technical_score(df):
         score = 0
         details = []
         
-        # A) Matriz Heikin Ashi (3 Pts)
+        # A) Matriz Heikin Ashi
         if calculate_ha_candle(df): score+=1; details.append("HA Diario Alcista (+1)")
         else: details.append("HA Diario Bajista (0)")
             
@@ -126,7 +120,7 @@ def get_technical_score(df):
         if calculate_ha_candle(df_m): score+=1; details.append("HA Mensual Alcista (+1)")
         else: details.append("HA Mensual Bajista (0)")
 
-        # B) Medias Móviles (7 Pts)
+        # B) Medias Móviles
         price = df['Close'].iloc[-1]
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         ma50 = df['Close'].rolling(50).mean().iloc[-1]
@@ -142,38 +136,40 @@ def get_technical_score(df):
         else: details.append("Debajo MA200 (0)")
         
         return min(score, 10), details
-    except: return 0, ["Error Datos"]
+    except: return 0, ["Error Técnico"]
 
-# 2. ESTRUCTURA DE OPCIONES + SENTIMIENTO
 def get_options_data(ticker, price):
+    # Valores por defecto de fallo
+    def_res = (5, "Sin Opciones", 0, 0, 0, "N/A")
     try:
         tk = yf.Ticker(ticker)
-        exps = tk.options
-        if not exps: return 5, "Sin Opciones", 0, 0, 0, "N/A"
+        # Intentamos obtener opciones con timeout implícito de YF
+        try:
+            exps = tk.options
+        except:
+            return def_res
+            
+        if not exps: return def_res
         
         opt = tk.option_chain(exps[0])
         calls = opt.calls
         puts = opt.puts
         
-        if calls.empty or puts.empty: return 5, "Data Vacía", 0, 0, 0, "N/A"
+        if calls.empty or puts.empty: return def_res
         
-        # --- SENTIMIENTO (Ratio Put/Call) ---
+        # Sentimiento
         total_call_oi = calls['openInterest'].sum()
         total_put_oi = puts['openInterest'].sum()
-        
-        # Ratio PC
         pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
         
-        # Etiqueta Sentimiento
         if pcr < 0.7: sentiment = "🚀 Alcista (Euforia)"
         elif pcr > 1.3: sentiment = "🐻 Bajista (Miedo)"
         else: sentiment = "⚖️ Neutral"
 
-        # --- ESTRUCTURA (Muros y Max Pain) ---
+        # Estructura
         cw = calls.loc[calls['openInterest'].idxmax()]['strike']
         pw = puts.loc[puts['openInterest'].idxmax()]['strike']
         
-        # Max Pain
         strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
         relevant = [s for s in strikes if price * 0.7 < s < price * 1.3]
         if not relevant: relevant = strikes
@@ -185,7 +181,7 @@ def get_options_data(ticker, price):
             cash_values.append(c_loss + p_loss)
         mp = relevant[np.argmin(cash_values)] if cash_values else price
 
-        # --- SCORE (0-10) ---
+        # Score
         score = 5
         detail = "Rango Medio"
         
@@ -201,9 +197,8 @@ def get_options_data(ticker, price):
                 else: detail = f"Rango ${pw}-${cw}"
                 
         return score, detail, cw, pw, mp, sentiment
-    except: return 5, "Error API", 0, 0, 0, "Error"
+    except: return def_res
 
-# 3. ESTACIONALIDAD FINANCIERA (Anti-Aplanadora)
 def get_seasonality_score(df):
     try:
         curr_month = datetime.now().month
@@ -217,23 +212,18 @@ def get_seasonality_score(df):
         
         wins = hist[hist > 0]
         losses = hist[hist < 0]
-        
         avg_win = wins.mean() if not wins.empty else 0
         avg_loss = abs(losses.mean()) if not losses.empty else 0
         
-        # Score Base
         score = win_rate * 6 
-        
-        # Bonos y Castigos
         if avg_ret > 0.01: score += 4 
         elif avg_ret > 0: score += 2 
         else: score -= 2 
         
-        # FILTRO ANTI-APLANADORA
         warning = ""
         if avg_loss > (avg_win * 2) and avg_loss > 0.03:
             score -= 3
-            warning = "⚠️ RIESGO ALTO (Loss > 2x Win)"
+            warning = "⚠️ RIESGO (Loss > 2x Win)"
         
         final = max(0, min(10, score))
         detail = f"WR: {win_rate:.0%} | Avg: {avg_ret:.1%}"
@@ -242,12 +232,27 @@ def get_seasonality_score(df):
         return final, detail, avg_ret
     except: return 5, "Error Estacional", 0
 
-# --- FUNCIÓN MAESTRA ---
+# --- FUNCIÓN MAESTRA TOLERANTE A FALLOS ---
 def analyze_complete(ticker):
+    # Estructura por defecto en caso de fallo total
+    default_res = {
+        "Ticker": ticker, "Price": 0, "Score": 0, "Verdict": "⚠️ SIN DATOS",
+        "S_Tec": 0, "D_Tec_List": [], "D_Tec_Str": "Error de Conexión",
+        "S_Opt": 0, "D_Opt": "N/A", "Sentiment": "N/A",
+        "S_Sea": 0, "D_Sea": "N/A", "Avg_Ret": 0,
+        "CW": 0, "PW": 0, "Max_Pain": 0, "History": None
+    }
+    
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="5y")
-        if df.empty: return None
+        # Intentamos descargar. Si falla, devolvemos default pero NO None (para que aparezca en tabla)
+        try:
+            df = tk.history(period="5y")
+        except:
+            return default_res
+            
+        if df.empty:
+            return default_res
         
         price = df['Close'].iloc[-1]
         
@@ -256,7 +261,7 @@ def analyze_complete(ticker):
         d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d])
         if not d_tec_str: d_tec_str = "Técnicamente Débil"
         
-        # 2. Opciones y Sentimiento
+        # 2. Opciones
         s_opt, d_opt, cw, pw, mp, sentiment = get_options_data(ticker, price)
         
         # 3. Estacionalidad
@@ -279,7 +284,10 @@ def analyze_complete(ticker):
             "CW": cw, "PW": pw, "Max_Pain": mp,
             "History": df
         }
-    except: return None
+    except Exception as e:
+        # Si explota algo inesperado, devolvemos el error visible
+        default_res["D_Tec_Str"] = str(e)
+        return default_res
 
 # --- UI ---
 with st.sidebar:
@@ -297,13 +305,16 @@ with st.sidebar:
         targets = batches[sel_batch]
         prog = st.progress(0)
         status = st.empty()
-        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v6']]
+        
+        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v7']]
         to_run = [t for t in targets if t not in mem_tickers]
         
         for i, t in enumerate(to_run):
             status.markdown(f"🔍 Analizando **{t}**...")
+            # Ahora analyze_complete SIEMPRE devuelve un dict, nunca None
             res = analyze_complete(t)
-            if res: st.session_state['st360_db_v6'].append(res)
+            st.session_state['st360_db_v7'].append(res)
+            
             prog.progress((i+1)/len(to_run))
             time.sleep(0.5)
             
@@ -314,7 +325,7 @@ with st.sidebar:
         st.rerun()
         
     if col_b2.button("🗑️ Limpiar"):
-        st.session_state['st360_db_v6'] = []
+        st.session_state['st360_db_v7'] = []
         st.rerun()
 
     st.divider()
@@ -323,17 +334,17 @@ with st.sidebar:
         if manual_t:
             with st.spinner("Procesando..."):
                 res = analyze_complete(manual_t)
-                if res:
-                    st.session_state['st360_db_v6'] = [x for x in st.session_state['st360_db_v6'] if x['Ticker'] != manual_t]
-                    st.session_state['st360_db_v6'].append(res)
-                    st.rerun()
-                else: st.error("Sin datos.")
+                # Eliminamos versión anterior si existe y agregamos nueva
+                st.session_state['st360_db_v7'] = [x for x in st.session_state['st360_db_v7'] if x['Ticker'] != manual_t]
+                st.session_state['st360_db_v7'].append(res)
+                st.rerun()
 
+# --- VISTA ---
 st.title("🧠 SystemaTrader 360: Master Database")
-st.caption("Algoritmo: Técnico Multi-Timeframe (40%) + Estructura y Sentimiento (30%) + Estacionalidad Inteligente (30%)")
+st.caption("Algoritmo de Fusión: Técnico (40%) + Estructura (30%) + Estacionalidad (30%)")
 
-if st.session_state['st360_db_v6']:
-    df_view = pd.DataFrame(st.session_state['st360_db_v6'])
+if st.session_state['st360_db_v7']:
+    df_view = pd.DataFrame(st.session_state['st360_db_v7'])
     if 'Score' in df_view.columns: df_view = df_view.sort_values("Score", ascending=False)
     
     st.subheader("1. Tablero de Comando")
@@ -352,71 +363,74 @@ if st.session_state['st360_db_v6']:
     
     st.divider()
     st.subheader("2. Inspección de Activo")
-    selection = st.selectbox("Selecciona para ver detalle:", df_view['Ticker'].tolist())
-    item = next((x for x in st.session_state['st360_db_v6'] if x['Ticker'] == selection), None)
+    # Filtramos solo los que tienen datos válidos para el detalle
+    valid_options = df_view[df_view['Verdict'] != "⚠️ SIN DATOS"]['Ticker'].tolist()
     
-    if item:
-        c1, c2, c3 = st.columns(3)
-        sc = item['Score']
-        clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
+    if valid_options:
+        selection = st.selectbox("Selecciona para ver detalle:", valid_options)
+        item = next((x for x in st.session_state['st360_db_v7'] if x['Ticker'] == selection), None)
         
-        with c1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="score-label">TÉCNICO (40%)</div>
-                <div class="big-score" style="color: #555;">{item['S_Tec']:.1f}<span style="font-size:1rem">/10</span></div>
-                <div class="sub-info">{item['D_Tec_Str']}</div>
-            </div>""", unsafe_allow_html=True)
+        if item:
+            c1, c2, c3 = st.columns(3)
+            sc = item['Score']
+            clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
             
-        with c2:
-            st.markdown(f"""
-            <div class="metric-card" style="border: 2px solid {clr};">
-                <div class="score-label" style="color:{clr};">PUNTAJE CRÍTICO</div>
-                <div class="big-score" style="color: {clr};">{sc:.0f}<span style="font-size:1rem">/100</span></div>
-                <div style="font-weight:bold; color:{clr};">{item['Verdict']}</div>
-            </div>""", unsafe_allow_html=True)
-            
-        with c3:
-            # Aquí mostramos el Sentimiento
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="score-label">ESTRUCTURA (30%)</div>
-                <div class="big-score" style="color: #555;">{item['S_Opt']:.1f}<span style="font-size:1rem">/10</span></div>
-                <div class="sub-info">{item['D_Opt']}</div>
-                <div class="sentiment-tag" style="background-color: #f0f2f6; border: 1px solid #ccc; color: #333;">
-                    {item['Sentiment']}
-                </div>
-            </div>""", unsafe_allow_html=True)
-            
-        st.caption(f"📅 Estacionalidad: **{item['S_Sea']:.1f}/10** - {item['D_Sea']}")
-        
-        with st.expander("🧮 Auditoría del Cálculo (Caja Blanca)"):
-            st.markdown(f"""
-            **1. Técnico (Multi-Timeframe):**
-            """)
-            for d in item['D_Tec_List']:
-                st.markdown(f"- {'✅' if '(+' in d else '❌'} {d}")
+            with c1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="score-label">TÉCNICO (40%)</div>
+                    <div class="big-score" style="color: #555;">{item['S_Tec']:.1f}<span style="font-size:1rem">/10</span></div>
+                    <div class="sub-info">{item['D_Tec_Str']}</div>
+                </div>""", unsafe_allow_html=True)
                 
-            st.markdown(f"""
-            **2. Estructura y Sentimiento:**
-            - **Sentimiento (Put/Call Ratio):** {item['Sentiment']}
-            - **Precio:** ${item['Price']:.2f}
-            - **Muros:** Put Wall ${item['PW']:.2f} | Call Wall ${item['CW']:.2f}
-            - **Max Pain:** ${item['Max_Pain']:.2f}
+            with c2:
+                st.markdown(f"""
+                <div class="metric-card" style="border: 2px solid {clr};">
+                    <div class="score-label" style="color:{clr};">PUNTAJE CRÍTICO</div>
+                    <div class="big-score" style="color: {clr};">{sc:.0f}<span style="font-size:1rem">/100</span></div>
+                    <div style="font-weight:bold; color:{clr};">{item['Verdict']}</div>
+                </div>""", unsafe_allow_html=True)
+                
+            with c3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="score-label">ESTRUCTURA (30%)</div>
+                    <div class="big-score" style="color: #555;">{item['S_Opt']:.1f}<span style="font-size:1rem">/10</span></div>
+                    <div class="sub-info">{item['D_Opt']}</div>
+                    <div class="sentiment-tag" style="background-color: #f0f2f6; border: 1px solid #ccc; color: #333;">
+                        {item['Sentiment']}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+                
+            st.caption(f"📅 Estacionalidad: **{item['S_Sea']:.1f}/10** - {item['D_Sea']}")
             
-            **3. Estacionalidad Financiera:**
-            - **Diagnóstico:** {item['D_Sea']}
-            - *Nota: Si el WinRate es alto pero el puntaje es bajo, es porque las pérdidas promedio son el doble que las ganancias (Riesgo de Ruina).*
-            """)
-            
-        hist = item['History']
-        fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'])])
-        if item['CW'] > 0:
-            fig.add_hline(y=item['CW'], line_dash="dash", line_color="red", annotation_text="Call Wall")
-            fig.add_hline(y=item['PW'], line_dash="dash", line_color="green", annotation_text="Put Wall")
-            fig.add_hline(y=item['Max_Pain'], line_dash="dot", line_color="blue", annotation_text="Max Pain")
-        
-        fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=20, b=0, l=0, r=0))
-        st.plotly_chart(fig, use_container_width=True)
+            with st.expander("🧮 Auditoría del Cálculo (Caja Blanca)"):
+                st.markdown("**1. Técnico (Multi-Timeframe):**")
+                for d in item['D_Tec_List']:
+                    st.markdown(f"- {'✅' if '(+' in d else '❌'} {d}")
+                    
+                st.markdown(f"""
+                **2. Estructura y Sentimiento:**
+                - Ratio Put/Call: {item['Sentiment']}
+                - Precio: ${item['Price']:.2f}
+                - Muros: Put ${item['PW']:.2f} | Call ${item['CW']:.2f}
+                - Max Pain: ${item['Max_Pain']:.2f}
+                
+                **3. Estacionalidad Financiera:**
+                - {item['D_Sea']}
+                """)
+                
+            if item['History'] is not None:
+                hist = item['History']
+                fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'])])
+                if item['CW'] > 0:
+                    fig.add_hline(y=item['CW'], line_dash="dash", line_color="red", annotation_text="Call Wall")
+                    fig.add_hline(y=item['PW'], line_dash="dash", line_color="green", annotation_text="Put Wall")
+                    fig.add_hline(y=item['Max_Pain'], line_dash="dot", line_color="blue", annotation_text="Max Pain")
+                
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=20, b=0, l=0, r=0))
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Los activos escaneados no tienen datos válidos para mostrar detalles (Error de descarga o sin historial).")
 
 else: st.info("👈 Selecciona un lote para comenzar.")
