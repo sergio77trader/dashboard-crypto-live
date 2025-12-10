@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader 360: Master Database")
+st.set_page_config(layout="wide", page_title="SystemaTrader 360: Gold Edition")
 
 # --- ESTILOS CSS ---
 st.markdown("""
@@ -19,182 +19,184 @@ st.markdown("""
         border-radius: 8px;
         text-align: center;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        min-height: 160px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
+        min-height: 140px;
+        display: flex; flex-direction: column; justify-content: center;
     }
     @media (prefers-color-scheme: dark) {
-        div[data-testid="stMetric"], .metric-card {
-            border: 1px solid #404040;
-        }
+        div[data-testid="stMetric"], .metric-card { border: 1px solid #404040; }
     }
     .big-score { font-size: 2.2rem; font-weight: 800; margin: 5px 0; }
-    .score-label { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; opacity: 0.8; letter-spacing: 1px;}
-    .sub-info { font-size: 0.85rem; color: #666; margin-top: 5px; }
+    .score-label { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.8; }
+    .sub-info { font-size: 0.8rem; color: #888; }
     
-    .sentiment-tag {
-        font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; display: inline-block; margin-top: 5px;
+    .market-banner {
+        padding: 10px; border-radius: 5px; text-align: center; margin-bottom: 20px; font-weight: bold;
+    }
+    .level-box {
+        border-left: 4px solid #ccc; padding-left: 10px; margin: 5px 0; text-align: left;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- BASE DE DATOS MAESTRA ---
 DB_CATEGORIES = {
-    '🇦🇷 Argentina (ADRs & Unicornios)': [
-        'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 
-        'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX'
-    ],
-    '🇺🇸 Mag 7 & Big Tech': [
-        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX', 
-        'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR', 'SNOW', 'SHOP', 'SPOT'
-    ],
-    '🤖 Semiconductores & AI': [
-        'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'LRCX', 
-        'ARM', 'SMCI', 'TSM', 'ASML'
-    ],
-    '🏦 Financiero (USA)': [
-        'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 
-        'BLK', 'PYPL', 'SQ', 'COIN', 'HOOD'
-    ],
-    '💊 Salud & Pharma': [
-        'LLY', 'NVO', 'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'BMY', 'AMGN', 
-        'GILD', 'AZN', 'NVS', 'SNY'
-    ],
-    '🛒 Consumo & Retail': [
-        'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 
-        'LOW', 'PG', 'CL', 'MO', 'PM'
-    ],
-    '🏭 Industria & Energía': [
-        'XOM', 'CVX', 'SLB', 'HAL', 'OXY', 'SHEL', 'BP', 'TTE',
-        'BA', 'CAT', 'DE', 'GE', 'MMM', 'HON', 'LMT', 'RTX',
-        'F', 'GM', 'TM', 'HMC', 'STLA'
-    ],
-    '🇧🇷 Brasil': [
-        'PBR', 'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GGB', 'SID'
-    ],
-    '🇨🇳 China': [
-        'BABA', 'JD', 'BIDU', 'PDD', 'NIO', 'TCOM', 'BEKE'
-    ],
-    '⛏️ Minería': [
-        'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP'
-    ],
-    '🪙 Crypto': [
-        'MSTR', 'MARA', 'RIOT', 'HUT', 'BITF', 'CLSK'
-    ],
-    '📈 ETFs': [
-        'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI',
-        'XLE', 'XLF', 'XLK', 'XLV', 'ARKK', 'SMH',
-        'GLD', 'SLV', 'GDX', 'XLY', 'XLP'
-    ]
+    '🇦🇷 Argentina': ['GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX'],
+    '🇺🇸 Mag 7 & Tech': ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX', 'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR'],
+    '🤖 Semis & AI': ['AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'ARM', 'SMCI', 'TSM', 'ASML'],
+    '🏦 Financiero': ['JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ', 'COIN'],
+    '💊 Salud': ['LLY', 'NVO', 'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'BMY', 'AMGN'],
+    '🛒 Consumo': ['KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'PG'],
+    '🏭 Industria': ['XOM', 'CVX', 'SLB', 'BA', 'CAT', 'DE', 'GE', 'MMM', 'LMT', 'F', 'GM'],
+    '🌎 Global': ['PBR', 'VALE', 'ITUB', 'BABA', 'JD', 'BIDU', 'GOLD', 'NEM', 'FCX'],
+    '📈 ETFs': ['SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'XLE', 'XLF', 'XLK', 'XLV', 'ARKK', 'GLD', 'SLV', 'GDX', 'XLY', 'XLP']
 }
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- INICIALIZAR ESTADO (V7 - Tolerante a Fallos) ---
-if 'st360_db_v7' not in st.session_state:
-    st.session_state['st360_db_v7'] = []
+# --- INICIALIZAR ESTADO (V8) ---
+if 'st360_db_v8' not in st.session_state: st.session_state['st360_db_v8'] = []
+
+# --- HELPERS MATEMÁTICOS ---
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, period=14):
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(period).mean()
 
 # --- MOTOR DE CÁLCULO ---
 
-def calculate_ha_candle(df):
-    if df.empty: return False
-    ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
-    last = df.index[-1]
-    return ha_close[last] > ha_open[last]
+def get_market_context():
+    """Analiza SPY y VIX para dar permiso de mercado"""
+    try:
+        tickers = yf.Tickers("SPY ^VIX")
+        spy = tickers.tickers['SPY'].history(period="6mo")
+        vix = tickers.tickers['^VIX'].history(period="5d")
+        
+        if spy.empty or vix.empty: return "NEUTRAL", "Sin datos Macro"
+        
+        spy_price = spy['Close'].iloc[-1]
+        spy_ma50 = spy['Close'].rolling(50).mean().iloc[-1]
+        vix_price = vix['Close'].iloc[-1]
+        
+        status = "NEUTRAL"
+        msg = ""
+        
+        if spy_price > spy_ma50 and vix_price < 20:
+            status = "BULLISH"
+            msg = f"✅ Mercado Sano (SPY > MA50 | VIX {vix_price:.1f})"
+        elif spy_price < spy_ma50 and vix_price > 25:
+            status = "BEARISH"
+            msg = f"🛑 Mercado Peligroso (SPY < MA50 | VIX {vix_price:.1f})"
+        else:
+            status = "CAUTION"
+            msg = f"⚠️ Mercado Mixto/Lateral (VIX {vix_price:.1f})"
+            
+        return status, msg
+    except: return "NEUTRAL", "Error Macro"
 
 def get_technical_score(df):
     try:
         score = 0
         details = []
         
-        # A) Matriz Heikin Ashi
-        if calculate_ha_candle(df): score+=1; details.append("HA Diario Alcista (+1)")
-        else: details.append("HA Diario Bajista (0)")
-            
-        df_w = df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'})
-        if calculate_ha_candle(df_w): score+=1; details.append("HA Semanal Alcista (+1)")
-        else: details.append("HA Semanal Bajista (0)")
+        # 1. HA Matrix (3 pts)
+        ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+        ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
         
-        df_m = df.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'})
-        if calculate_ha_candle(df_m): score+=1; details.append("HA Mensual Alcista (+1)")
-        else: details.append("HA Mensual Bajista (0)")
+        daily_green = ha_close.iloc[-1] > ha_open.iloc[-1]
+        
+        df_w = df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last'})
+        ha_close_w = (df_w['Open']+df_w['High']+df_w['Low']+df_w['Close'])/4
+        ha_open_w = (df_w['Open'].shift(1)+df_w['Close'].shift(1))/2
+        weekly_green = ha_close_w.iloc[-1] > ha_open_w.iloc[-1] if not df_w.empty else False
 
-        # B) Medias Móviles
+        if daily_green: score+=1; details.append("HA Diario Alcista")
+        else: details.append("HA Diario Bajista")
+        
+        if weekly_green: score+=1; details.append("HA Semanal Alcista")
+        else: details.append("HA Semanal Bajista")
+        
+        # Mensual simplificado
+        if daily_green and weekly_green: score+=1 # Bonus de alineación
+
+        # 2. Medias (5 pts)
         price = df['Close'].iloc[-1]
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         ma50 = df['Close'].rolling(50).mean().iloc[-1]
         ma200 = df['Close'].rolling(200).mean().iloc[-1]
         
-        if price > ma20: score += 2; details.append("Precio > MA20 (+2)")
-        else: details.append("Precio < MA20 (0)")
+        if price > ma20: score+=1; details.append("> MA20")
+        if ma20 > ma50: score+=2; details.append("MA20 > MA50")
+        if price > ma200: score+=2; details.append("> MA200")
 
-        if ma20 > ma50: score += 3; details.append("Tendencia Sana (MA20 > MA50) (+3)")
-        else: details.append("Tendencia Débil (0)")
-
-        if price > ma200: score += 2; details.append("Tendencia Largo Plazo (>MA200) (+2)")
-        else: details.append("Debajo MA200 (0)")
+        # 3. RSI (2 pts o Penalización)
+        rsi = calculate_rsi(df['Close']).iloc[-1]
+        details.append(f"RSI: {rsi:.1f}")
         
-        return min(score, 10), details
-    except: return 0, ["Error Técnico"]
+        if 40 <= rsi <= 65: score += 2 # Zona Ideal de tendencia
+        elif rsi > 70: 
+            score -= 2 # Penalización por Sobrecompra
+            details.append("⚠️ SOBRECOMPRA")
+        elif rsi < 30:
+            score += 1 # Posible rebote
+            details.append("♻️ SOBREVENTA")
+            
+        return max(0, min(10, score)), details, rsi
+    except: return 0, ["Error"], 50
 
 def get_options_data(ticker, price):
-    # Valores por defecto de fallo
+    # Default values
     def_res = (5, "Sin Opciones", 0, 0, 0, "N/A")
     try:
         tk = yf.Ticker(ticker)
-        # Intentamos obtener opciones con timeout implícito de YF
-        try:
-            exps = tk.options
-        except:
-            return def_res
+        try: exps = tk.options
+        except: return def_res
             
         if not exps: return def_res
         
         opt = tk.option_chain(exps[0])
-        calls = opt.calls
-        puts = opt.puts
-        
+        calls = opt.calls; puts = opt.puts
         if calls.empty or puts.empty: return def_res
         
         # Sentimiento
-        total_call_oi = calls['openInterest'].sum()
-        total_put_oi = puts['openInterest'].sum()
-        pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
-        
-        if pcr < 0.7: sentiment = "🚀 Alcista (Euforia)"
-        elif pcr > 1.3: sentiment = "🐻 Bajista (Miedo)"
-        else: sentiment = "⚖️ Neutral"
+        pcr = puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0
+        sentiment = "🚀 Euforia" if pcr < 0.7 else "🐻 Miedo" if pcr > 1.3 else "⚖️ Neutral"
 
-        # Estructura
+        # Muros & Max Pain
         cw = calls.loc[calls['openInterest'].idxmax()]['strike']
         pw = puts.loc[puts['openInterest'].idxmax()]['strike']
         
         strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-        relevant = [s for s in strikes if price * 0.7 < s < price * 1.3]
-        if not relevant: relevant = strikes
+        rel = [s for s in strikes if price*0.7 < s < price*1.3] or strikes
         
-        cash_values = []
-        for s in relevant:
-            c_loss = calls.apply(lambda r: max(0, s - r['strike']) * r['openInterest'], axis=1).sum()
-            p_loss = puts.apply(lambda r: max(0, r['strike'] - s) * r['openInterest'], axis=1).sum()
-            cash_values.append(c_loss + p_loss)
-        mp = relevant[np.argmin(cash_values)] if cash_values else price
+        cash = []
+        for s in rel:
+            c_loss = calls.apply(lambda r: max(0, s-r['strike'])*r['openInterest'], axis=1).sum()
+            p_loss = puts.apply(lambda r: max(0, r['strike']-s)*r['openInterest'], axis=1).sum()
+            cash.append(c_loss+p_loss)
+        mp = rel[np.argmin(cash)] if cash else price
 
         # Score
         score = 5
         detail = "Rango Medio"
-        
         if price > cw: score=10; detail="🚀 Breakout Gamma"
         elif price < pw: score=1; detail="💀 Breakdown Gamma"
         else:
             rng = cw - pw
             if rng > 0:
-                pos = (price - pw) / rng
-                score = 10 - (pos * 10)
-                if score > 8: detail = "🟢 Soporte (Put Wall)"
-                elif score < 2: detail = "🧱 Resistencia (Call Wall)"
-                else: detail = f"Rango ${pw}-${cw}"
+                pos = (price - pw)/rng
+                score = 10 - (pos*10)
+                if score > 8: detail="🟢 Soporte (PW)"
+                elif score < 2: detail="🧱 Resistencia (CW)"
+                else: detail=f"Rango ${pw}-${cw}"
                 
         return score, detail, cw, pw, mp, sentiment
     except: return def_res
@@ -204,70 +206,52 @@ def get_seasonality_score(df):
         curr_month = datetime.now().month
         m_ret = df['Close'].resample('ME').last().pct_change()
         hist = m_ret[m_ret.index.month == curr_month]
-        
         if len(hist) < 2: return 5, "Sin Historia", 0
         
-        win_rate = (hist > 0).mean()
-        avg_ret = hist.mean()
+        win = (hist > 0).mean()
+        avg = hist.mean()
         
-        wins = hist[hist > 0]
-        losses = hist[hist < 0]
-        avg_win = wins.mean() if not wins.empty else 0
-        avg_loss = abs(losses.mean()) if not losses.empty else 0
+        score = win * 6
+        if avg > 0.01: score += 4
+        elif avg > 0: score += 2
+        else: score -= 2
         
-        score = win_rate * 6 
-        if avg_ret > 0.01: score += 4 
-        elif avg_ret > 0: score += 2 
-        else: score -= 2 
+        # Anti-Aplanadora logic
+        wins = hist[hist>0]; losses = hist[hist<0]
+        avg_w = wins.mean() if not wins.empty else 0
+        avg_l = abs(losses.mean()) if not losses.empty else 0
         
         warning = ""
-        if avg_loss > (avg_win * 2) and avg_loss > 0.03:
-            score -= 3
-            warning = "⚠️ RIESGO (Loss > 2x Win)"
-        
-        final = max(0, min(10, score))
-        detail = f"WR: {win_rate:.0%} | Avg: {avg_ret:.1%}"
-        if warning: detail += f" {warning}"
-        
-        return final, detail, avg_ret
-    except: return 5, "Error Estacional", 0
+        if avg_l > (avg_w * 2) and avg_l > 0.03:
+            score -= 3; warning = "⚠️ RIESGO (Loss > 2x Win)"
+            
+        return max(0, min(10, score)), f"WR: {win:.0%} | {warning}", avg
+    except: return 5, "N/A", 0
 
-# --- FUNCIÓN MAESTRA TOLERANTE A FALLOS ---
+def calculate_levels(df, price):
+    try:
+        atr = calculate_atr(df).iloc[-1]
+        # Estrategia Swing: SL = 2 ATR, TP = 1.5R
+        sl = price - (2 * atr)
+        tp = price + (3 * atr)
+        return atr, sl, tp
+    except: return 0, 0, 0
+
 def analyze_complete(ticker):
-    # Estructura por defecto en caso de fallo total
-    default_res = {
-        "Ticker": ticker, "Price": 0, "Score": 0, "Verdict": "⚠️ SIN DATOS",
-        "S_Tec": 0, "D_Tec_List": [], "D_Tec_Str": "Error de Conexión",
-        "S_Opt": 0, "D_Opt": "N/A", "Sentiment": "N/A",
-        "S_Sea": 0, "D_Sea": "N/A", "Avg_Ret": 0,
-        "CW": 0, "PW": 0, "Max_Pain": 0, "History": None
-    }
-    
     try:
         tk = yf.Ticker(ticker)
-        # Intentamos descargar. Si falla, devolvemos default pero NO None (para que aparezca en tabla)
-        try:
-            df = tk.history(period="5y")
-        except:
-            return default_res
-            
-        if df.empty:
-            return default_res
+        df = tk.history(period="2y")
+        if df.empty: return None
         
         price = df['Close'].iloc[-1]
         
-        # 1. Técnico
-        s_tec, d_tec_list = get_technical_score(df)
-        d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d])
-        if not d_tec_str: d_tec_str = "Técnicamente Débil"
+        s_tec, d_tec_list, rsi = get_technical_score(df)
+        d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d or "RSI" in d])
         
-        # 2. Opciones
-        s_opt, d_opt, cw, pw, mp, sentiment = get_options_data(ticker, price)
-        
-        # 3. Estacionalidad
+        s_opt, d_opt, cw, pw, mp, sent = get_options_data(ticker, price)
         s_sea, d_sea, avg_ret = get_seasonality_score(df)
+        atr, sl, tp = calculate_levels(df, price)
         
-        # Ponderación
         final = (s_tec * 4) + (s_opt * 3) + (s_sea * 3)
         
         verdict = "NEUTRAL"
@@ -278,18 +262,28 @@ def analyze_complete(ticker):
         
         return {
             "Ticker": ticker, "Price": price, "Score": final, "Verdict": verdict,
-            "S_Tec": s_tec, "D_Tec_List": d_tec_list, "D_Tec_Str": d_tec_str,
-            "S_Opt": s_opt, "D_Opt": d_opt, "Sentiment": sentiment,
-            "S_Sea": s_sea, "D_Sea": d_sea, "Avg_Ret": avg_ret,
+            "S_Tec": s_tec, "D_Tec_List": d_tec_list, "D_Tec_Str": d_tec_str, "RSI": rsi,
+            "S_Opt": s_opt, "D_Opt": d_opt, "Sentiment": sent,
+            "S_Sea": s_sea, "D_Sea": d_sea,
             "CW": cw, "PW": pw, "Max_Pain": mp,
+            "ATR": atr, "SL": sl, "TP": tp,
             "History": df
         }
-    except Exception as e:
-        # Si explota algo inesperado, devolvemos el error visible
-        default_res["D_Tec_Str"] = str(e)
-        return default_res
+    except: return None
 
 # --- UI ---
+
+# 1. MARKET BANNER
+macro_status, macro_msg = get_market_context()
+color_macro = "#d4edda" if "✅" in macro_msg else "#f8d7da" if "🛑" in macro_msg else "#fff3cd"
+text_macro = "#155724" if "✅" in macro_msg else "#721c24" if "🛑" in macro_msg else "#856404"
+
+st.markdown(f"""
+<div class="market-banner" style="background-color: {color_macro}; color: {text_macro}; border: 1px solid {text_macro};">
+    🌎 CONTEXTO DE MERCADO: {macro_msg}
+</div>
+""", unsafe_allow_html=True)
+
 with st.sidebar:
     st.header("⚙️ Panel de Control")
     st.info(f"Base de Datos: {len(CEDEAR_DATABASE)} Activos")
@@ -297,140 +291,127 @@ with st.sidebar:
     batch_size = st.slider("Tamaño del Lote", 1, 15, 5)
     batches = [CEDEAR_DATABASE[i:i + batch_size] for i in range(0, len(CEDEAR_DATABASE), batch_size)]
     batch_labels = [f"Lote {i+1}: {b[0]} ... {b[-1]}" for i, b in enumerate(batches)]
-    
     sel_batch = st.selectbox("Seleccionar Lote:", range(len(batches)), format_func=lambda x: batch_labels[x])
     
-    col_b1, col_b2 = st.columns(2)
-    if col_b1.button("▶️ ESCANEAR", type="primary"):
+    c1, c2 = st.columns(2)
+    if c1.button("▶️ ESCANEAR", type="primary"):
         targets = batches[sel_batch]
         prog = st.progress(0)
-        status = st.empty()
+        st_txt = st.empty()
+        mem = [x['Ticker'] for x in st.session_state['st360_db_v8']]
+        run = [t for t in targets if t not in mem]
         
-        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v7']]
-        to_run = [t for t in targets if t not in mem_tickers]
+        for i, t in enumerate(run):
+            st_txt.markdown(f"Analizando **{t}**...")
+            r = analyze_complete(t)
+            if r: st.session_state['st360_db_v8'].append(r)
+            prog.progress((i+1)/len(run))
+            time.sleep(0.3)
+        st_txt.empty(); prog.empty(); st.rerun()
         
-        for i, t in enumerate(to_run):
-            status.markdown(f"🔍 Analizando **{t}**...")
-            # Ahora analyze_complete SIEMPRE devuelve un dict, nunca None
-            res = analyze_complete(t)
-            st.session_state['st360_db_v7'].append(res)
-            
-            prog.progress((i+1)/len(to_run))
-            time.sleep(0.5)
-            
-        status.success("✅ Listo")
-        time.sleep(1)
-        status.empty()
-        prog.empty()
-        st.rerun()
-        
-    if col_b2.button("🗑️ Limpiar"):
-        st.session_state['st360_db_v7'] = []
-        st.rerun()
+    if c2.button("🗑️ Limpiar"):
+        st.session_state['st360_db_v8'] = []; st.rerun()
 
     st.divider()
-    manual_t = st.text_input("Ticker (Ej: XLY):").upper().strip()
-    if st.button("Analizar Individual"):
-        if manual_t:
+    mt = st.text_input("Ticker Manual:").upper().strip()
+    if st.button("Analizar"):
+        if mt:
             with st.spinner("Procesando..."):
-                res = analyze_complete(manual_t)
-                # Eliminamos versión anterior si existe y agregamos nueva
-                st.session_state['st360_db_v7'] = [x for x in st.session_state['st360_db_v7'] if x['Ticker'] != manual_t]
-                st.session_state['st360_db_v7'].append(res)
-                st.rerun()
+                r = analyze_complete(mt)
+                if r:
+                    st.session_state['st360_db_v8'] = [x for x in st.session_state['st360_db_v8'] if x['Ticker']!=mt]
+                    st.session_state['st360_db_v8'].append(r)
+                    st.rerun()
 
-# --- VISTA ---
-st.title("🧠 SystemaTrader 360: Master Database")
-st.caption("Algoritmo de Fusión: Técnico (40%) + Estructura (30%) + Estacionalidad (30%)")
+st.title("SystemaTrader 360: Gold Edition")
 
-if st.session_state['st360_db_v7']:
-    df_view = pd.DataFrame(st.session_state['st360_db_v7'])
-    if 'Score' in df_view.columns: df_view = df_view.sort_values("Score", ascending=False)
+if st.session_state['st360_db_v8']:
+    dfv = pd.DataFrame(st.session_state['st360_db_v8'])
+    if 'Score' in dfv.columns: dfv = dfv.sort_values("Score", ascending=False)
     
-    st.subheader("1. Tablero de Comando")
     st.dataframe(
-        df_view[['Ticker', 'Price', 'Score', 'Verdict', 'S_Tec', 'S_Opt', 'S_Sea']],
+        dfv[['Ticker', 'Price', 'Score', 'Verdict', 'S_Tec', 'S_Opt', 'S_Sea']],
         column_config={
-            "Ticker": "Activo",
-            "Price": st.column_config.NumberColumn(format="$%.2f"),
-            "Score": st.column_config.ProgressColumn("Puntaje Crítico", min_value=0, max_value=100, format="%.0f"),
+            "Ticker": "Activo", "Price": st.column_config.NumberColumn(format="$%.2f"),
+            "Score": st.column_config.ProgressColumn("Puntaje", min_value=0, max_value=100, format="%.0f"),
             "S_Tec": st.column_config.NumberColumn("Técnico", format="%.1f"),
             "S_Opt": st.column_config.NumberColumn("Opciones", format="%.1f"),
-            "S_Sea": st.column_config.NumberColumn("Estacional", format="%.1f"),
-        },
-        use_container_width=True, hide_index=True, height=350
+            "S_Sea": st.column_config.NumberColumn("Estac.", format="%.1f")
+        }, use_container_width=True, hide_index=True
     )
     
     st.divider()
-    st.subheader("2. Inspección de Activo")
-    # Filtramos solo los que tienen datos válidos para el detalle
-    valid_options = df_view[df_view['Verdict'] != "⚠️ SIN DATOS"]['Ticker'].tolist()
+    sel = st.selectbox("Inspección Profunda:", dfv['Ticker'].tolist())
+    it = next((x for x in st.session_state['st360_db_v8'] if x['Ticker'] == sel), None)
     
-    if valid_options:
-        selection = st.selectbox("Selecciona para ver detalle:", valid_options)
-        item = next((x for x in st.session_state['st360_db_v7'] if x['Ticker'] == selection), None)
+    if it:
+        k1, k2, k3, k4 = st.columns(4)
+        sc = it['Score']
+        clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
         
-        if item:
-            c1, c2, c3 = st.columns(3)
-            sc = item['Score']
-            clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
-            
-            with c1:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="score-label">TÉCNICO (40%)</div>
-                    <div class="big-score" style="color: #555;">{item['S_Tec']:.1f}<span style="font-size:1rem">/10</span></div>
-                    <div class="sub-info">{item['D_Tec_Str']}</div>
-                </div>""", unsafe_allow_html=True)
-                
-            with c2:
-                st.markdown(f"""
-                <div class="metric-card" style="border: 2px solid {clr};">
-                    <div class="score-label" style="color:{clr};">PUNTAJE CRÍTICO</div>
-                    <div class="big-score" style="color: {clr};">{sc:.0f}<span style="font-size:1rem">/100</span></div>
-                    <div style="font-weight:bold; color:{clr};">{item['Verdict']}</div>
-                </div>""", unsafe_allow_html=True)
-                
-            with c3:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="score-label">ESTRUCTURA (30%)</div>
-                    <div class="big-score" style="color: #555;">{item['S_Opt']:.1f}<span style="font-size:1rem">/10</span></div>
-                    <div class="sub-info">{item['D_Opt']}</div>
-                    <div class="sentiment-tag" style="background-color: #f0f2f6; border: 1px solid #ccc; color: #333;">
-                        {item['Sentiment']}
-                    </div>
-                </div>""", unsafe_allow_html=True)
-                
-            st.caption(f"📅 Estacionalidad: **{item['S_Sea']:.1f}/10** - {item['D_Sea']}")
-            
-            with st.expander("🧮 Auditoría del Cálculo (Caja Blanca)"):
-                st.markdown("**1. Técnico (Multi-Timeframe):**")
-                for d in item['D_Tec_List']:
-                    st.markdown(f"- {'✅' if '(+' in d else '❌'} {d}")
-                    
-                st.markdown(f"""
-                **2. Estructura y Sentimiento:**
-                - Ratio Put/Call: {item['Sentiment']}
-                - Precio: ${item['Price']:.2f}
-                - Muros: Put ${item['PW']:.2f} | Call ${item['CW']:.2f}
-                - Max Pain: ${item['Max_Pain']:.2f}
-                
-                **3. Estacionalidad Financiera:**
-                - {item['D_Sea']}
-                """)
-                
-            if item['History'] is not None:
-                hist = item['History']
-                fig = go.Figure(data=[go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'])])
-                if item['CW'] > 0:
-                    fig.add_hline(y=item['CW'], line_dash="dash", line_color="red", annotation_text="Call Wall")
-                    fig.add_hline(y=item['PW'], line_dash="dash", line_color="green", annotation_text="Put Wall")
-                    fig.add_hline(y=item['Max_Pain'], line_dash="dot", line_color="blue", annotation_text="Max Pain")
-                
-                fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=20, b=0, l=0, r=0))
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Los activos escaneados no tienen datos válidos para mostrar detalles (Error de descarga o sin historial).")
+        with k1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="score-label">TÉCNICO (40%)</div>
+                <div class="big-score" style="color:#555;">{it['S_Tec']:.1f}</div>
+                <div class="sub-info">RSI: {it['RSI']:.1f}</div>
+            </div>""", unsafe_allow_html=True)
+        with k2:
+            st.markdown(f"""
+            <div class="metric-card" style="border: 2px solid {clr};">
+                <div class="score-label" style="color:{clr};">PUNTAJE</div>
+                <div class="big-score" style="color:{clr};">{sc:.0f}</div>
+                <div style="font-weight:bold; color:{clr};">{it['Verdict']}</div>
+            </div>""", unsafe_allow_html=True)
+        with k3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="score-label">ESTRUCTURA (30%)</div>
+                <div class="big-score" style="color:#555;">{it['S_Opt']:.1f}</div>
+                <div class="sub-info">{it['Sentiment']}</div>
+            </div>""", unsafe_allow_html=True)
+        with k4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="score-label">GESTIÓN RIESGO</div>
+                <div style="text-align:left; font-size:0.9rem;">
+                🎯 <b>TP:</b> ${it['TP']:.2f}<br>
+                🛡️ <b>SL:</b> ${it['SL']:.2f}<br>
+                📊 <b>ATR:</b> ${it['ATR']:.2f}
+                </div>
+            </div>""", unsafe_allow_html=True)
 
-else: st.info("👈 Selecciona un lote para comenzar.")
+        st.caption(f"📅 Estacionalidad Financiera: **{it['S_Sea']:.1f}/10** - {it['D_Sea']}")
+
+        with st.expander("🔎 Auditoría y Niveles Operativos"):
+            st.markdown(f"""
+            **1. Análisis Técnico & RSI:**
+            - RSI Actual: {it['RSI']:.1f} (Ideal: 40-65)
+            - Detalles: {', '.join(it['D_Tec_List'])}
+            
+            **2. Estructura de Mercado:**
+            - Sentimiento: {it['Sentiment']}
+            - Muros: Put ${it['PW']:.2f} | Call ${it['CW']:.2f} | Max Pain ${it['Max_Pain']:.2f}
+            
+            **3. Plan de Trading Sugerido (Basado en Volatilidad ATR):**
+            - Si compras a **${it['Price']:.2f}**:
+            - Tu **Stop Loss** debería estar en **${it['SL']:.2f}** (2x ATR).
+            - Tu **Objetivo (Take Profit)** debería ser **${it['TP']:.2f}** (3x ATR).
+            """)
+            
+        h = it['History']
+        fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name='Precio')])
+        
+        # Plot Levels
+        if it['SL'] > 0:
+            fig.add_hline(y=it['SL'], line_dash="solid", line_color="red", annotation_text="STOP LOSS", annotation_position="bottom right")
+            fig.add_hline(y=it['TP'], line_dash="solid", line_color="green", annotation_text="TAKE PROFIT", annotation_position="top right")
+        
+        if it['CW'] > 0:
+            fig.add_hline(y=it['CW'], line_dash="dot", line_color="orange", annotation_text="Call Wall")
+            fig.add_hline(y=it['PW'], line_dash="dot", line_color="cyan", annotation_text="Put Wall")
+            
+        fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=30, b=0, l=0, r=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+else: st.info("👈 Comienza escaneando un lote.")
