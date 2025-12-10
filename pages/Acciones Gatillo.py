@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader 360: Platinum V2")
+st.set_page_config(layout="wide", page_title="SystemaTrader 360: Platinum V3")
 
 # --- ESTILOS CSS ---
 st.markdown("""
@@ -53,7 +53,7 @@ DB_CATEGORIES = {
 }
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- ESTADO (V11 - Limpieza de caché) ---
+# --- ESTADO (V11) ---
 if 'st360_db_v11' not in st.session_state: st.session_state['st360_db_v11'] = []
 
 # --- HELPERS MATEMÁTICOS ---
@@ -184,7 +184,6 @@ def get_options_data(ticker, price):
         
         strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
         rel = [s for s in strikes if price*0.7 < s < price*1.3] or strikes
-        
         cash = []
         for s in rel:
             c_loss = calls.apply(lambda r: max(0, s-r['strike'])*r['openInterest'], axis=1).sum()
@@ -192,7 +191,6 @@ def get_options_data(ticker, price):
             cash.append(c_loss+p_loss)
         mp = rel[np.argmin(cash)] if cash else price
 
-        # Score
         score = 5
         detail = "Rango Medio"
         if price > cw: score=10; detail="🚀 Breakout Gamma"
@@ -223,7 +221,6 @@ def get_seasonality_score(df):
         elif avg > 0: score += 2
         else: score -= 2
         
-        # Anti-Aplanadora
         wins = hist[hist>0]; losses = hist[hist<0]
         avg_w = wins.mean() if not wins.empty else 0
         avg_l = abs(losses.mean()) if not losses.empty else 0
@@ -235,14 +232,6 @@ def get_seasonality_score(df):
         return max(0, min(10, score)), f"WR: {win:.0%} | {warning}", avg
     except: return 5, "N/A", 0
 
-def calculate_levels(df, price):
-    try:
-        atr = calculate_atr(df).iloc[-1]
-        sl = price - (2 * atr)
-        tp = price + (3 * atr)
-        return atr, sl, tp
-    except: return 0, 0, 0
-
 def analyze_complete(ticker):
     try:
         tk = yf.Ticker(ticker)
@@ -250,20 +239,14 @@ def analyze_complete(ticker):
         if df.empty: return None
         price = df['Close'].iloc[-1]
         
-        # 1. Técnico
         s_tec, d_tec_list, rsi = get_technical_score(df)
         d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d or "RSI" in d])
         
-        # 2. Opciones
         s_opt, d_opt, cw, pw, mp, sent, pcr_val = get_options_data(ticker, price)
         
-        # 3. Estacionalidad
         s_sea, d_sea, avg_ret = get_seasonality_score(df)
-        
-        # 4. Niveles
         atr, sl, tp = calculate_levels(df, price)
         
-        # 5. Contexto
         macro_st, macro_msg, vix, vix_st, bench = get_market_context_dynamic(ticker)
         
         final = (s_tec * 4) + (s_opt * 3) + (s_sea * 3)
@@ -323,14 +306,49 @@ with st.sidebar:
                     st.session_state['st360_db_v11'].append(r)
                     st.rerun()
 
-st.title("SystemaTrader 360: Platinum V2")
+st.title("SystemaTrader 360: Platinum V3 (Filtros)")
 
 if st.session_state['st360_db_v11']:
-    dfv = pd.DataFrame(st.session_state['st360_db_v11'])
-    if 'Score' in dfv.columns: dfv = dfv.sort_values("Score", ascending=False)
+    # 1. PREPARAR DATAFRAME
+    df_raw = pd.DataFrame(st.session_state['st360_db_v11'])
     
+    # Calcular categorías para filtro
+    df_raw['Vol_Cat'] = df_raw.apply(lambda x: "⚡ Alta" if (x['ATR']/x['Price']*100)>3.5 else ("🐢 Baja" if (x['ATR']/x['Price']*100)<1.5 else "✨ Normal"), axis=1)
+    df_raw['RSI_Cat'] = df_raw['RSI'].apply(lambda x: "⚠️ Sobrecompra" if x>70 else ("♻️ Sobreventa" if x<30 else "✅ Sano"))
+    df_raw['Sent_Cat'] = df_raw['Sentiment'].apply(lambda x: "EUFORIA" if "EUFORIA" in x else ("MIEDO" if "MIEDO" in x else "NEUTRAL"))
+
+    # --- ZONA DE FILTROS ---
+    with st.expander("🔍 FILTROS INTELIGENTES", expanded=True):
+        f1, f2, f3, f4 = st.columns(4)
+        
+        with f1:
+            score_range = st.slider("Puntaje Crítico", 0, 100, (0, 100))
+        with f2:
+            fil_sent = st.multiselect("Sentimiento (Contrarian)", ["EUFORIA", "MIEDO", "NEUTRAL"], default=[])
+        with f3:
+            fil_vol = st.multiselect("Riesgo / Volatilidad", ["⚡ Alta", "✨ Normal", "🐢 Baja"], default=[])
+        with f4:
+            fil_rsi = st.multiselect("Estado Técnico (RSI)", ["✅ Sano", "⚠️ Sobrecompra", "♻️ Sobreventa"], default=[])
+
+    # APLICAR FILTROS
+    df_final = df_raw.copy()
+    
+    # Filtro Puntaje
+    df_final = df_final[(df_final['Score'] >= score_range[0]) & (df_final['Score'] <= score_range[1])]
+    
+    # Filtros Opcionales
+    if fil_sent: df_final = df_final[df_final['Sent_Cat'].isin(fil_sent)]
+    if fil_vol: df_final = df_final[df_final['Vol_Cat'].isin(fil_vol)]
+    if fil_rsi: df_final = df_final[df_final['RSI_Cat'].isin(fil_rsi)]
+    
+    # Ordenar
+    df_final = df_final.sort_values("Score", ascending=False)
+
+    st.caption(f"Mostrando **{len(df_final)}** de {len(df_raw)} activos analizados.")
+
+    # --- TABLA FILTRADA ---
     st.dataframe(
-        dfv[['Ticker', 'Price', 'Score', 'Verdict', 'S_Tec', 'S_Opt', 'S_Sea']],
+        df_final[['Ticker', 'Price', 'Score', 'Verdict', 'S_Tec', 'S_Opt', 'S_Sea']],
         column_config={
             "Ticker": "Activo", "Price": st.column_config.NumberColumn(format="$%.2f"),
             "Score": st.column_config.ProgressColumn("Puntaje", min_value=0, max_value=100, format="%.0f"),
@@ -341,79 +359,85 @@ if st.session_state['st360_db_v11']:
     )
     
     st.divider()
-    sel = st.selectbox("Inspección Profunda:", dfv['Ticker'].tolist())
-    it = next((x for x in st.session_state['st360_db_v11'] if x['Ticker'] == sel), None)
     
-    if it:
-        rsi_msg, rsi_bg, rsi_txt = get_rsi_alert(it['RSI'])
-        atr_msg, atr_bg, atr_txt = get_atr_alert(it['ATR'], it['Price'])
+    # --- INSPECCIÓN (Usar lista filtrada) ---
+    list_tickers = df_final['Ticker'].tolist()
+    
+    if list_tickers:
+        sel = st.selectbox("Inspección Profunda (Filtrados):", list_tickers)
+        it = next((x for x in st.session_state['st360_db_v11'] if x['Ticker'] == sel), None)
         
-        sent_bg = "#F5F5F5"; sent_txt = "#333"
-        if "EUFORIA" in it['Sentiment']: sent_bg, sent_txt = "#FFEBEE", "#C62828"
-        elif "MIEDO" in it['Sentiment']: sent_bg, sent_txt = "#E8F5E9", "#2E7D32"
-        
-        clr_mc = "#d4edda" if "✅" in it['Macro_Msg'] else "#f8d7da"
-        txt_mc = "#155724" if "✅" in it['Macro_Msg'] else "#721c24"
-        
-        st.markdown(f"""
-        <div class="context-box" style="background-color: {clr_mc}; color: {txt_mc}; border-color: {txt_mc};">
-            🌍 <b>CONTEXTO REGIONAL ({it['Bench']}):</b> {it['Macro_Msg']} | 📉 <b>VIX:</b> {it['VIX']:.2f} ({it['VIX_St']})
-        </div>
-        """, unsafe_allow_html=True)
-        
-        k1, k2, k3, k4 = st.columns(4)
-        sc = it['Score']
-        clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
-        
-        with k1:
+        if it:
+            rsi_msg, rsi_bg, rsi_txt = get_rsi_alert(it['RSI'])
+            atr_msg, atr_bg, atr_txt = get_atr_alert(it['ATR'], it['Price'])
+            
+            sent_bg = "#F5F5F5"; sent_txt = "#333"
+            if "EUFORIA" in it['Sentiment']: sent_bg, sent_txt = "#FFEBEE", "#C62828"
+            elif "MIEDO" in it['Sentiment']: sent_bg, sent_txt = "#E8F5E9", "#2E7D32"
+            
+            clr_mc = "#d4edda" if "✅" in it['Macro_Msg'] else "#f8d7da"
+            txt_mc = "#155724" if "✅" in it['Macro_Msg'] else "#721c24"
+            
             st.markdown(f"""
-            <div class="metric-card">
-                <div class="score-label">TÉCNICO</div>
-                <div class="big-score" style="color:#555;">{it['S_Tec']:.1f}</div>
-                <div class="alert-tag" style="background-color:{rsi_bg}; color:{rsi_txt};">{rsi_msg}</div>
-            </div>""", unsafe_allow_html=True)
-        with k2:
-            st.markdown(f"""<div class="metric-card" style="border:2px solid {clr};"><div class="score-label" style="color:{clr};">PUNTAJE</div><div class="big-score" style="color:{clr};">{sc:.0f}</div><div style="font-weight:bold; color:{clr};">{it['Verdict']}</div></div>""", unsafe_allow_html=True)
-        with k3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="score-label">ESTRUCTURA</div>
-                <div class="big-score" style="color:#555;">{it['S_Opt']:.1f}</div>
-                <div class="alert-tag" style="background-color:{sent_bg}; color:{sent_txt};">{it['Sentiment']}</div>
-                <div style="font-size:0.75rem; color:#666; margin-top:4px;">{it['D_Opt']}</div>
-            </div>""", unsafe_allow_html=True)
-        with k4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="score-label">RIESGO</div>
-                <div class="alert-tag" style="background-color:{atr_bg}; color:{atr_txt}; margin-bottom:5px;">{atr_msg}</div>
-                <div style="text-align:left; font-size:0.85rem;">🎯 <b>TP:</b> ${it['TP']:.2f}<br>🛡️ <b>SL:</b> ${it['SL']:.2f}</div>
-            </div>""", unsafe_allow_html=True)
+            <div class="context-box" style="background-color: {clr_mc}; color: {txt_mc}; border-color: {txt_mc};">
+                🌍 <b>CONTEXTO REGIONAL ({it['Bench']}):</b> {it['Macro_Msg']} | 📉 <b>VIX:</b> {it['VIX']:.2f} ({it['VIX_St']})
+            </div>
+            """, unsafe_allow_html=True)
+            
+            k1, k2, k3, k4 = st.columns(4)
+            sc = it['Score']
+            clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
+            
+            with k1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="score-label">TÉCNICO</div>
+                    <div class="big-score" style="color:#555;">{it['S_Tec']:.1f}</div>
+                    <div class="alert-tag" style="background-color:{rsi_bg}; color:{rsi_txt};">{rsi_msg}</div>
+                </div>""", unsafe_allow_html=True)
+            with k2:
+                st.markdown(f"""
+                <div class="metric-card" style="border: 2px solid {clr};">
+                    <div class="score-label" style="color:{clr};">PUNTAJE</div>
+                    <div class="big-score" style="color:{clr};">{sc:.0f}</div>
+                    <div style="font-weight:bold; color:{clr};">{it['Verdict']}</div>
+                </div>""", unsafe_allow_html=True)
+            with k3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="score-label">ESTRUCTURA</div>
+                    <div class="big-score" style="color:#555;">{it['S_Opt']:.1f}</div>
+                    <div class="alert-tag" style="background-color:{sent_bg}; color:{sent_txt};">
+                        {it['Sentiment']}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            with k4:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="score-label">RIESGO</div>
+                    <div class="alert-tag" style="background-color:{atr_bg}; color:{atr_txt}; margin-bottom:5px;">{atr_msg}</div>
+                    <div style="text-align:left; font-size:0.85rem;">🎯 <b>TP:</b> ${it['TP']:.2f}<br>🛡️ <b>SL:</b> ${it['SL']:.2f}</div>
+                </div>""", unsafe_allow_html=True)
 
-        with st.expander("🔎 Auditoría Completa"):
-            st.markdown(f"""
-            **1. Análisis Técnico:**
-            - Detalles: {', '.join(it['D_Tec_List'])}
-            - RSI: {it['RSI']:.1f}
-            
-            **2. Estructura de Opciones:**
-            - Sentimiento (Put/Call Ratio): {it['PCR']:.2f}
-            - Muros: Put ${it['PW']:.2f} | Call ${it['CW']:.2f} | Max Pain ${it['Max_Pain']:.2f}
-            
-            **3. Estacionalidad Financiera:**
-            - {it['D_Sea']}
-            """)
-            
-        h = it['History']
-        fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name='Precio')])
-        if it['SL'] > 0:
-            fig.add_hline(y=it['SL'], line_dash="solid", line_color="red", annotation_text="STOP")
-            fig.add_hline(y=it['TP'], line_dash="solid", line_color="green", annotation_text="PROFIT")
-        if it['CW'] > 0:
-            fig.add_hline(y=it['CW'], line_dash="dot", line_color="orange", annotation_text="Call Wall")
-            fig.add_hline(y=it['PW'], line_dash="dot", line_color="cyan", annotation_text="Put Wall")
-            
-        fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=30, b=0, l=0, r=0))
-        st.plotly_chart(fig, use_container_width=True)
+            with st.expander("🔎 Auditoría Completa"):
+                st.markdown(f"""
+                **1. Análisis Técnico:** RSI: {it['RSI']:.1f}. Detalles: {', '.join(it['D_Tec_List'])}
+                **2. Estructura:** Sentimiento PCR: {it['PCR']:.2f}. Muros: Put ${it['PW']:.2f} | Call ${it['CW']:.2f}. Max Pain ${it['Max_Pain']:.2f}
+                **3. Estacionalidad:** {it['D_Sea']}
+                """)
+                
+            h = it['History']
+            fig = go.Figure(data=[go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name='Precio')])
+            if it['SL'] > 0:
+                fig.add_hline(y=it['SL'], line_dash="solid", line_color="red", annotation_text="STOP")
+                fig.add_hline(y=it['TP'], line_dash="solid", line_color="green", annotation_text="PROFIT")
+            if it['CW'] > 0:
+                fig.add_hline(y=it['CW'], line_dash="dot", line_color="orange", annotation_text="Call Wall")
+                fig.add_hline(y=it['PW'], line_dash="dot", line_color="cyan", annotation_text="Put Wall")
+                
+            fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=30, b=0, l=0, r=0))
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No hay activos que cumplan con los filtros seleccionados.")
 
 else: st.info("👈 Comienza escaneando un lote.")
