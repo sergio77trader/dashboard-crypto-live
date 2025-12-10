@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader 360: Platinum")
+st.set_page_config(layout="wide", page_title="SystemaTrader 360: Diamond")
 
 # --- ESTILOS CSS ---
 st.markdown("""
@@ -16,22 +16,24 @@ st.markdown("""
         background-color: transparent !important;
         border: 1px solid #e0e0e0;
         padding: 15px; border-radius: 8px; text-align: center;
-        min-height: 140px; display: flex; flex-direction: column; justify-content: center;
+        min-height: 160px; display: flex; flex-direction: column; justify-content: center;
     }
     @media (prefers-color-scheme: dark) {
         div[data-testid="stMetric"], .metric-card { border: 1px solid #404040; }
     }
     .big-score { font-size: 2.2rem; font-weight: 800; margin: 5px 0; }
     .score-label { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.8; }
-    .sub-info { font-size: 0.8rem; color: #888; }
+    .sub-info { font-size: 0.8rem; color: #666; }
     
-    .context-box {
-        padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 5px solid #ccc;
+    .context-box { padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #ccc; font-size: 0.9rem;}
+    
+    .alert-tag {
+        font-size: 0.75rem; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-top: 4px; display: inline-block;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- BASE DE DATOS MAESTRA ---
+# --- BASE DE DATOS ---
 DB_CATEGORIES = {
     '🇦🇷 Argentina': ['GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX'],
     '🇺🇸 Mag 7 & Tech': ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX', 'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR'],
@@ -47,10 +49,10 @@ DB_CATEGORIES = {
 }
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- INICIALIZAR ESTADO (V9) ---
-if 'st360_db_v9' not in st.session_state: st.session_state['st360_db_v9'] = []
+# --- ESTADO (V10) ---
+if 'st360_db_v10' not in st.session_state: st.session_state['st360_db_v10'] = []
 
-# --- HELPERS MATEMÁTICOS ---
+# --- HELPERS ---
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -66,189 +68,129 @@ def calculate_atr(df, period=14):
     true_range = np.max(ranges, axis=1)
     return true_range.rolling(period).mean()
 
-# --- MOTOR DE CÁLCULO ---
+# --- ALERTAS INTELIGENTES ---
+def get_rsi_alert(rsi):
+    if rsi > 70: return "⚠️ SOBRECOMPRA (Riesgo Corrección)", "#FFEBEE", "#C62828" # Rojo claro fondo, Rojo oscuro texto
+    if rsi < 30: return "♻️ SOBREVENTA (Posible Rebote)", "#E8F5E9", "#2E7D32" # Verde claro
+    if 40 <= rsi <= 65: return "✅ TENDENCIA SANA", "#E3F2FD", "#1565C0" # Azul claro
+    return "⚖️ NEUTRAL", "#F5F5F5", "#616161"
 
+def get_atr_alert(atr, price):
+    atr_pct = (atr / price) * 100
+    if atr_pct > 3.5: return f"⚡ VOLATILIDAD ALTA ({atr_pct:.1f}%)", "#FFF3E0", "#EF6C00" # Naranja
+    if atr_pct < 1.5: return f"🐢 VOLATILIDAD BAJA ({atr_pct:.1f}%)", "#F3E5F5", "#6A1B9A" # Violeta
+    return f"✨ VOLATILIDAD NORMAL ({atr_pct:.1f}%)", "#E0F2F1", "#00695C" # Teal
+
+# --- MOTOR DE CÁLCULO ---
 def detect_region_benchmark(ticker):
-    """Detecta qué índice usar según el activo"""
     if ticker in DB_CATEGORIES['🇦🇷 Argentina']: return 'ARGT', "ETF Argentina"
     if ticker in DB_CATEGORIES['🇧🇷 Brasil']: return 'EWZ', "ETF Brasil"
-    if ticker in DB_CATEGORIES['🇨🇳 China']: return 'FXI', "ETF China Large-Cap"
-    if ticker in DB_CATEGORIES['🤖 Semis & AI']: return 'SOXX', "ETF Semiconductores"
-    if ticker in DB_CATEGORIES['⛏️ Minería']: return 'GDX', "ETF Mineras Oro"
-    return 'SPY', "S&P 500 (USA)"
+    if ticker in DB_CATEGORIES['🇨🇳 China']: return 'FXI', "ETF China"
+    if ticker in DB_CATEGORIES['🤖 Semis & AI']: return 'SOXX', "ETF Semis"
+    if ticker in DB_CATEGORIES['⛏️ Minería']: return 'GDX', "ETF Oro"
+    return 'SPY', "S&P 500"
 
 def get_market_context_dynamic(ticker):
-    """Analiza el Benchmark Regional + VIX Global"""
     try:
-        benchmark_ticker, benchmark_name = detect_region_benchmark(ticker)
+        bench_tk, bench_name = detect_region_benchmark(ticker)
+        data = yf.Tickers(f"{bench_tk} ^VIX")
+        bench = data.tickers[bench_tk].history(period="6mo")
+        vix = data.tickers['^VIX'].history(period="5d")
         
-        # Descargamos Benchmark + VIX
-        tickers = yf.Tickers(f"{benchmark_ticker} ^VIX")
-        bench = tickers.tickers[benchmark_ticker].history(period="6mo")
-        vix = tickers.tickers['^VIX'].history(period="5d")
+        if bench.empty: return "NEUTRAL", f"Sin datos {bench_name}", 0, "N/A", bench_name
         
-        if bench.empty: return "NEUTRAL", f"Sin datos de {benchmark_name}", 0
-        
-        # Análisis Técnico del Benchmark
         price = bench['Close'].iloc[-1]
         ma50 = bench['Close'].rolling(50).mean().iloc[-1]
-        vix_price = vix['Close'].iloc[-1] if not vix.empty else 0
+        vix_p = vix['Close'].iloc[-1] if not vix.empty else 0
         
-        # Lógica del Semáforo
-        status = "NEUTRAL"
+        stt = "BULLISH" if price > ma50 else "BEARISH"
+        msg = f"{'✅ Alcista' if price > ma50 else '🛑 Bajista'} en {bench_name}"
+        vix_st = "🟢 Calma" if vix_p < 20 else "🔴 MIEDO" if vix_p > 25 else "🟡 Alerta"
         
-        # VIX Semáforo
-        vix_status = "🟢 Calma" if vix_price < 20 else "🔴 MIEDO" if vix_price > 25 else "🟡 Alerta"
-        
-        if price > ma50:
-            status = "BULLISH"
-            msg = f"✅ Tendencia Alcista en {benchmark_name} (Sobre MA50)"
-        else:
-            status = "BEARISH"
-            msg = f"🛑 Tendencia Bajista en {benchmark_name} (Debajo MA50)"
-            
-        return status, msg, vix_price, vix_status, benchmark_name
+        return stt, msg, vix_p, vix_st, bench_name
     except: return "NEUTRAL", "Error Macro", 0, "N/A", "SPY"
-
-def get_technical_score(df):
-    try:
-        score = 0; details = []
-        
-        # 1. HA Matrix (3 pts)
-        ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-        ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
-        d_green = ha_close.iloc[-1] > ha_open.iloc[-1]
-        
-        df_w = df.resample('W').agg({'Open':'first','High':'max','Low':'min','Close':'last'})
-        ha_close_w = (df_w['Open']+df_w['High']+df_w['Low']+df_w['Close'])/4
-        ha_open_w = (df_w['Open'].shift(1)+df_w['Close'].shift(1))/2
-        w_green = ha_close_w.iloc[-1] > ha_open_w.iloc[-1] if not df_w.empty else False
-
-        if d_green: score+=1; details.append("HA Diario Alcista")
-        else: details.append("HA Diario Bajista")
-        if w_green: score+=1; details.append("HA Semanal Alcista")
-        else: details.append("HA Semanal Bajista")
-        if d_green and w_green: score+=1
-
-        # 2. Medias (5 pts)
-        price = df['Close'].iloc[-1]
-        ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        ma50 = df['Close'].rolling(50).mean().iloc[-1]
-        ma200 = df['Close'].rolling(200).mean().iloc[-1]
-        
-        if price > ma20: score+=1; details.append("> MA20")
-        if ma20 > ma50: score+=2; details.append("MA20 > MA50")
-        if price > ma200: score+=2; details.append("> MA200")
-
-        # 3. RSI (2 pts)
-        rsi = calculate_rsi(df['Close']).iloc[-1]
-        details.append(f"RSI: {rsi:.1f}")
-        if 40 <= rsi <= 65: score += 2 
-        elif rsi > 70: score -= 2; details.append("⚠️ SOBRECOMPRA")
-        elif rsi < 30: score += 1; details.append("♻️ SOBREVENTA")
-            
-        return max(0, min(10, score)), details, rsi
-    except: return 0, ["Error"], 50
-
-def get_options_data(ticker, price):
-    def_res = (5, "Sin Opciones", 0, 0, 0, "N/A")
-    try:
-        tk = yf.Ticker(ticker)
-        try: exps = tk.options
-        except: return def_res
-        if not exps: return def_res
-        opt = tk.option_chain(exps[0])
-        calls = opt.calls; puts = opt.puts
-        if calls.empty or puts.empty: return def_res
-        
-        pcr = puts['openInterest'].sum() / calls['openInterest'].sum() if calls['openInterest'].sum() > 0 else 0
-        sentiment = "🚀 Euforia" if pcr < 0.7 else "🐻 Miedo" if pcr > 1.3 else "⚖️ Neutral"
-
-        cw = calls.loc[calls['openInterest'].idxmax()]['strike']
-        pw = puts.loc[puts['openInterest'].idxmax()]['strike']
-        
-        strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
-        rel = [s for s in strikes if price*0.7 < s < price*1.3] or strikes
-        cash = []
-        for s in rel:
-            c_loss = calls.apply(lambda r: max(0, s-r['strike'])*r['openInterest'], axis=1).sum()
-            p_loss = puts.apply(lambda r: max(0, r['strike']-s)*r['openInterest'], axis=1).sum()
-            cash.append(c_loss+p_loss)
-        mp = rel[np.argmin(cash)] if cash else price
-
-        score = 5
-        detail = "Rango Medio"
-        if price > cw: score=10; detail="🚀 Breakout Gamma"
-        elif price < pw: score=1; detail="💀 Breakdown Gamma"
-        else:
-            rng = cw - pw
-            if rng > 0:
-                pos = (price - pw)/rng
-                score = 10 - (pos*10)
-                if score > 8: detail="🟢 Soporte (PW)"
-                elif score < 2: detail="🧱 Resistencia (CW)"
-                else: detail=f"Rango ${pw}-${cw}"
-                
-        return score, detail, cw, pw, mp, sentiment
-    except: return def_res
-
-def get_seasonality_score(df):
-    try:
-        curr_month = datetime.now().month
-        m_ret = df['Close'].resample('ME').last().pct_change()
-        hist = m_ret[m_ret.index.month == curr_month]
-        if len(hist) < 2: return 5, "Sin Historia", 0
-        
-        win = (hist > 0).mean()
-        avg = hist.mean()
-        
-        score = win * 6
-        if avg > 0.01: score += 4
-        elif avg > 0: score += 2
-        else: score -= 2
-        
-        wins = hist[hist>0]; losses = hist[hist<0]
-        avg_w = wins.mean() if not wins.empty else 0
-        avg_l = abs(losses.mean()) if not losses.empty else 0
-        
-        warning = ""
-        if avg_l > (avg_w * 2) and avg_l > 0.03:
-            score -= 3; warning = "⚠️ RIESGO (Loss > 2x Win)"
-            
-        return max(0, min(10, score)), f"WR: {win:.0%} | {warning}", avg
-    except: return 5, "N/A", 0
-
-def calculate_levels(df, price):
-    try:
-        atr = calculate_atr(df).iloc[-1]
-        sl = price - (2 * atr)
-        tp = price + (3 * atr)
-        return atr, sl, tp
-    except: return 0, 0, 0
 
 def analyze_complete(ticker):
     try:
         tk = yf.Ticker(ticker)
         df = tk.history(period="2y")
         if df.empty: return None
-        
         price = df['Close'].iloc[-1]
         
-        s_tec, d_tec_list, rsi = get_technical_score(df)
-        d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d or "RSI" in d])
+        # 1. Técnico
+        rsi = calculate_rsi(df['Close']).iloc[-1]
+        score_tec = 0
+        details_tec = []
         
-        s_opt, d_opt, cw, pw, mp, sent = get_options_data(ticker, price)
-        s_sea, d_sea, avg_ret = get_seasonality_score(df)
-        atr, sl, tp = calculate_levels(df, price)
+        # HA Logic
+        ha_close = (df['Open']+df['High']+df['Low']+df['Close'])/4
+        ha_open = (df['Open'].shift(1)+df['Close'].shift(1))/2
+        daily_green = ha_close.iloc[-1] > ha_open.iloc[-1]
+        if daily_green: score_tec += 1
         
-        # OBTENER CONTEXTO REGIONAL
-        macro_st, macro_msg, vix, vix_st, bench_name = get_market_context_dynamic(ticker)
+        # Medias
+        ma20 = df['Close'].rolling(20).mean().iloc[-1]
+        ma50 = df['Close'].rolling(50).mean().iloc[-1]
+        if price > ma20: score_tec += 2; details_tec.append("> MA20")
+        if ma20 > ma50: score_tec += 3; details_tec.append("Tendencia Sana")
         
-        final = (s_tec * 4) + (s_opt * 3) + (s_sea * 3)
+        # RSI Score
+        if 40 <= rsi <= 65: score_tec += 2
+        elif rsi > 70: score_tec -= 2
+        elif rsi < 30: score_tec += 1
         
-        # Penalización Macro (Nuevo)
-        if macro_st == "BEARISH": final -= 10 # Si el índice regional cae, restamos puntos
-        if vix > 25: final -= 5 # Si hay miedo global, restamos puntos
+        score_tec = max(0, min(10, score_tec))
+        
+        # 2. Opciones
+        try:
+            exps = tk.options
+            opt = tk.option_chain(exps[0])
+            calls, puts = opt.calls, opt.puts
+            cw = calls.loc[calls['openInterest'].idxmax()]['strike']
+            pw = puts.loc[puts['openInterest'].idxmax()]['strike']
+            
+            pcr = puts['openInterest'].sum() / calls['openInterest'].sum()
+            sent = "🚀 Euforia" if pcr < 0.7 else "🐻 Miedo" if pcr > 1.3 else "⚖️ Neutral"
+            
+            strikes = sorted(list(set(calls['strike'].tolist()+puts['strike'].tolist())))
+            rel = [s for s in strikes if price*0.7 < s < price*1.3] or strikes
+            cash = []
+            for s in rel:
+                c_l = calls.apply(lambda r: max(0, s-r['strike'])*r['openInterest'], axis=1).sum()
+                p_l = puts.apply(lambda r: max(0, r['strike']-s)*r['openInterest'], axis=1).sum()
+                cash.append(c_l+p_l)
+            mp = rel[np.argmin(cash)] if cash else price
+            
+            score_opt = 5
+            if price > cw: score_opt = 10
+            elif price < pw: score_opt = 1
+            else:
+                rng = cw - pw
+                if rng > 0: score_opt = 10 - ((price-pw)/rng * 10)
+        except:
+            score_opt, cw, pw, mp, sent = 5, 0, 0, 0, "N/A"
+
+        # 3. Estacionalidad & Niveles
+        curr_m = datetime.now().month
+        m_ret = df['Close'].resample('ME').last().pct_change()
+        hist = m_ret[m_ret.index.month == curr_m]
+        
+        win = (hist>0).mean() if len(hist)>1 else 0
+        score_sea = win * 6
+        avg_ret = hist.mean() if len(hist)>1 else 0
+        if avg_ret > 0.01: score_sea += 4
+        
+        # ATR Logic
+        atr = calculate_atr(df).iloc[-1]
+        sl = price - (2 * atr)
+        tp = price + (3 * atr)
+        
+        # Contexto
+        macro_st, macro_msg, vix, vix_st, bench = get_market_context_dynamic(ticker)
+        
+        final = (score_tec * 4) + (score_opt * 3) + (score_sea * 3)
+        if macro_st == "BEARISH": final -= 10
+        if vix > 25: final -= 5
         
         verdict = "NEUTRAL"
         if final >= 75: verdict = "🔥 COMPRA FUERTE"
@@ -258,12 +200,11 @@ def analyze_complete(ticker):
         
         return {
             "Ticker": ticker, "Price": price, "Score": final, "Verdict": verdict,
-            "S_Tec": s_tec, "D_Tec_List": d_tec_list, "D_Tec_Str": d_tec_str, "RSI": rsi,
-            "S_Opt": s_opt, "D_Opt": d_opt, "Sentiment": sent,
-            "S_Sea": s_sea, "D_Sea": d_sea,
-            "CW": cw, "PW": pw, "Max_Pain": mp,
+            "S_Tec": score_tec, "RSI": rsi,
+            "S_Opt": score_opt, "Sentiment": sent, "CW": cw, "PW": pw, "Max_Pain": mp,
+            "S_Sea": score_sea, "Avg_Ret": avg_ret,
             "ATR": atr, "SL": sl, "TP": tp,
-            "Macro_Msg": macro_msg, "Bench": bench_name, "VIX": vix, "VIX_St": vix_st,
+            "Macro_Msg": macro_msg, "Bench": bench, "VIX": vix, "VIX_St": vix_st,
             "History": df
         }
     except: return None
@@ -282,18 +223,16 @@ with st.sidebar:
     if c1.button("▶️ ESCANEAR", type="primary"):
         targets = batches[sel_batch]
         prog = st.progress(0)
-        st_txt = st.empty()
-        mem = [x['Ticker'] for x in st.session_state['st360_db_v9']]
+        mem = [x['Ticker'] for x in st.session_state['st360_db_v10']]
         run = [t for t in targets if t not in mem]
         for i, t in enumerate(run):
-            st_txt.markdown(f"Analizando **{t}**...")
             r = analyze_complete(t)
-            if r: st.session_state['st360_db_v9'].append(r)
+            if r: st.session_state['st360_db_v10'].append(r)
             prog.progress((i+1)/len(run))
             time.sleep(0.3)
-        st_txt.empty(); prog.empty(); st.rerun()
+        prog.empty(); st.rerun()
         
-    if c2.button("🗑️ Limpiar"): st.session_state['st360_db_v9'] = []; st.rerun()
+    if c2.button("🗑️ Limpiar"): st.session_state['st360_db_v10'] = []; st.rerun()
     st.divider()
     mt = st.text_input("Ticker Manual:").upper().strip()
     if st.button("Analizar"):
@@ -301,14 +240,14 @@ with st.sidebar:
             with st.spinner("Procesando..."):
                 r = analyze_complete(mt)
                 if r:
-                    st.session_state['st360_db_v9'] = [x for x in st.session_state['st360_db_v9'] if x['Ticker']!=mt]
-                    st.session_state['st360_db_v9'].append(r)
+                    st.session_state['st360_db_v10'] = [x for x in st.session_state['st360_db_v10'] if x['Ticker']!=mt]
+                    st.session_state['st360_db_v10'].append(r)
                     st.rerun()
 
-st.title("SystemaTrader 360: Platinum Edition")
+st.title("SystemaTrader 360: Diamond Edition")
 
-if st.session_state['st360_db_v9']:
-    dfv = pd.DataFrame(st.session_state['st360_db_v9'])
+if st.session_state['st360_db_v10']:
+    dfv = pd.DataFrame(st.session_state['st360_db_v10'])
     if 'Score' in dfv.columns: dfv = dfv.sort_values("Score", ascending=False)
     
     st.dataframe(
@@ -324,17 +263,20 @@ if st.session_state['st360_db_v9']:
     
     st.divider()
     sel = st.selectbox("Inspección Profunda:", dfv['Ticker'].tolist())
-    it = next((x for x in st.session_state['st360_db_v9'] if x['Ticker'] == sel), None)
+    it = next((x for x in st.session_state['st360_db_v10'] if x['Ticker'] == sel), None)
     
     if it:
-        # BANNER DE CONTEXTO ESPECÍFICO DEL ACTIVO
+        # Generar Textos de Alerta
+        rsi_msg, rsi_bg, rsi_txt = get_rsi_alert(it['RSI'])
+        atr_msg, atr_bg, atr_txt = get_atr_alert(it['ATR'], it['Price'])
+        
+        # BANNER CONTEXTO
         clr_mc = "#d4edda" if "✅" in it['Macro_Msg'] else "#f8d7da"
         txt_mc = "#155724" if "✅" in it['Macro_Msg'] else "#721c24"
         
         st.markdown(f"""
         <div class="context-box" style="background-color: {clr_mc}; color: {txt_mc}; border-color: {txt_mc};">
-            🌍 <b>CONTEXTO REGIONAL ({it['Bench']}):</b> {it['Macro_Msg']} <br>
-            📉 <b>VIX GLOBAL:</b> {it['VIX']:.2f} ({it['VIX_St']})
+            🌍 <b>CONTEXTO REGIONAL ({it['Bench']}):</b> {it['Macro_Msg']} | 📉 <b>VIX:</b> {it['VIX']:.2f} ({it['VIX_St']})
         </div>
         """, unsafe_allow_html=True)
         
@@ -343,24 +285,43 @@ if st.session_state['st360_db_v9']:
         clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
         
         with k1:
-            st.markdown(f"""<div class="metric-card"><div class="score-label">TÉCNICO</div><div class="big-score" style="color:#555;">{it['S_Tec']:.1f}</div><div class="sub-info">RSI: {it['RSI']:.1f}</div></div>""", unsafe_allow_html=True)
-        with k2:
-            st.markdown(f"""<div class="metric-card" style="border:2px solid {clr};"><div class="score-label" style="color:{clr};">PUNTAJE</div><div class="big-score" style="color:{clr};">{sc:.0f}</div><div style="font-weight:bold; color:{clr};">{it['Verdict']}</div></div>""", unsafe_allow_html=True)
-        with k3:
-            st.markdown(f"""<div class="metric-card"><div class="score-label">ESTRUCTURA</div><div class="big-score" style="color:#555;">{it['S_Opt']:.1f}</div><div class="sub-info">{it['Sentiment']}</div></div>""", unsafe_allow_html=True)
-        with k4:
-            st.markdown(f"""<div class="metric-card"><div class="score-label">NIVELES</div><div style="text-align:left; font-size:0.9rem;">🎯 <b>TP:</b> ${it['TP']:.2f}<br>🛡️ <b>SL:</b> ${it['SL']:.2f}<br>📊 <b>ATR:</b> ${it['ATR']:.2f}</div></div>""", unsafe_allow_html=True)
-
-        with st.expander("🔎 Auditoría y Niveles Operativos"):
             st.markdown(f"""
-            **1. Análisis Técnico & RSI:**
-            - RSI: {it['RSI']:.1f} | Detalles: {', '.join(it['D_Tec_List'])}
-            
-            **2. Estructura:**
-            - Muros: Put ${it['PW']:.2f} | Call ${it['CW']:.2f} | Max Pain ${it['Max_Pain']:.2f}
-            
-            **3. Plan de Trading (Volatilidad ATR):**
-            - Stop Loss Sugerido: ${it['SL']:.2f} | Take Profit Sugerido: ${it['TP']:.2f}
+            <div class="metric-card">
+                <div class="score-label">TÉCNICO</div>
+                <div class="big-score" style="color:#555;">{it['S_Tec']:.1f}</div>
+                <div class="alert-tag" style="background-color:{rsi_bg}; color:{rsi_txt};">{rsi_msg}</div>
+            </div>""", unsafe_allow_html=True)
+        with k2:
+            st.markdown(f"""
+            <div class="metric-card" style="border: 2px solid {clr};">
+                <div class="score-label" style="color:{clr};">PUNTAJE</div>
+                <div class="big-score" style="color:{clr};">{sc:.0f}</div>
+                <div style="font-weight:bold; color:{clr};">{it['Verdict']}</div>
+            </div>""", unsafe_allow_html=True)
+        with k3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="score-label">ESTRUCTURA</div>
+                <div class="big-score" style="color:#555;">{it['S_Opt']:.1f}</div>
+                <div class="sub-info">{it['Sentiment']}</div>
+            </div>""", unsafe_allow_html=True)
+        with k4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="score-label">RIESGO & VOLATILIDAD</div>
+                <div class="alert-tag" style="background-color:{atr_bg}; color:{atr_txt}; margin-bottom:5px;">{atr_msg}</div>
+                <div style="text-align:left; font-size:0.85rem;">
+                🎯 <b>TP:</b> ${it['TP']:.2f}<br>
+                🛡️ <b>SL:</b> ${it['SL']:.2f}<br>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        with st.expander("🔎 Auditoría y Niveles"):
+            st.markdown(f"""
+            **1. Análisis Técnico:** RSI: {it['RSI']:.1f}.
+            **2. Estructura:** Put Wall ${it['PW']:.2f} | Call Wall ${it['CW']:.2f} | Max Pain ${it['Max_Pain']:.2f}.
+            **3. Estacionalidad:** {it['Avg_Ret']:.1%} Retorno Promedio Histórico.
+            **4. Gestión:** ATR ${it['ATR']:.2f}. Stop Loss (2 ATR) y Take Profit (3 ATR).
             """)
             
         h = it['History']
