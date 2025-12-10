@@ -9,7 +9,7 @@ from datetime import datetime
 # --- CONFIGURACIÓN ---
 st.set_page_config(layout="wide", page_title="SystemaTrader 360: Master Database")
 
-# --- ESTILOS CSS (Fondo Transparente y Modo Oscuro/Claro compatible) ---
+# --- ESTILOS CSS ---
 st.markdown("""
 <style>
     div[data-testid="stMetric"], .metric-card {
@@ -30,8 +30,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- BASE DE DATOS MAESTRA DE CEDEARS (COMPLETA) ---
-# Organizada por sectores para crear lotes lógicos
+# --- BASE DE DATOS MAESTRA ---
 DB_CATEGORIES = {
     '🇦🇷 Argentina (ADRs & Unicornios)': [
         'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 
@@ -43,13 +42,13 @@ DB_CATEGORIES = {
     ],
     '🤖 Semiconductores & AI': [
         'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'LRCX', 
-        'ARM', 'SMCI', 'TSM', 'ASML' # TSM y ASML son ADRs clave
+        'ARM', 'SMCI', 'TSM', 'ASML'
     ],
     '🏦 Financiero (USA)': [
         'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 
         'BLK', 'PYPL', 'SQ', 'COIN', 'HOOD'
     ],
-    '💊 Salud & Pharma (Defensivo)': [
+    '💊 Salud & Pharma': [
         'LLY', 'NVO', 'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'BMY', 'AMGN', 
         'GILD', 'AZN', 'NVS', 'SNY'
     ],
@@ -57,43 +56,40 @@ DB_CATEGORIES = {
         'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 
         'LOW', 'PG', 'CL', 'MO', 'PM'
     ],
-    '🏭 Industria, Energía & Autos': [
-        'XOM', 'CVX', 'SLB', 'HAL', 'OXY', 'SHEL', 'BP', 'TTE', # Energía
-        'BA', 'CAT', 'DE', 'GE', 'MMM', 'HON', 'LMT', 'RTX', # Industria
-        'F', 'GM', 'TM', 'HMC', 'STLA' # Autos
+    '🏭 Industria & Energía': [
+        'XOM', 'CVX', 'SLB', 'HAL', 'OXY', 'SHEL', 'BP', 'TTE',
+        'BA', 'CAT', 'DE', 'GE', 'MMM', 'HON', 'LMT', 'RTX',
+        'F', 'GM', 'TM', 'HMC', 'STLA'
     ],
-    '🇧🇷 Brasil (ADRs)': [
+    '🇧🇷 Brasil': [
         'PBR', 'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GGB', 'SID'
     ],
-    '🇨🇳 China (ADRs)': [
+    '🇨🇳 China': [
         'BABA', 'JD', 'BIDU', 'PDD', 'NIO', 'TCOM', 'BEKE'
     ],
-    '⛏️ Minería & Materiales': [
+    '⛏️ Minería': [
         'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP'
     ],
-    '🪙 Crypto High-Beta': [
+    '🪙 Crypto': [
         'MSTR', 'MARA', 'RIOT', 'HUT', 'BITF', 'CLSK'
     ],
-    '📈 ETFs (Índices & Sectores)': [
-        'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI', # Índices
-        'XLE', 'XLF', 'XLK', 'XLV', 'ARKK', 'SMH', # Sectores
-        'GLD', 'SLV', 'GDX' # Commodities
+    '📈 ETFs': [
+        'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI',
+        'XLE', 'XLF', 'XLK', 'XLV', 'ARKK', 'SMH',
+        'GLD', 'SLV', 'GDX'
     ]
 }
 
-# Generamos la lista plana para el menú de lotes
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- INICIALIZAR ESTADO ---
-if 'st360_results' not in st.session_state:
-    st.session_state['st360_results'] = []
+# --- INICIALIZAR ESTADO (NOMBRE CAMBIADO PARA EVITAR CONFLICTO) ---
+if 'st360_db_v2' not in st.session_state:
+    st.session_state['st360_db_v2'] = []
 
-# --- MOTOR DE CÁLCULO (PUNTAJES) ---
+# --- MOTOR DE CÁLCULO ---
 
 def get_technical_score(df):
-    """0-10 Score basado en Heikin Ashi y Medias Móviles"""
     try:
-        # Heikin Ashi
         ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
         ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
         
@@ -119,7 +115,6 @@ def get_technical_score(df):
     except: return 0, "Datos insuficientes"
 
 def get_options_score(ticker, price):
-    """0-10 Score basado en posición relativa a Muros de Opciones"""
     try:
         tk = yf.Ticker(ticker)
         exps = tk.options
@@ -134,28 +129,27 @@ def get_options_score(ticker, price):
         cw = calls.loc[calls['openInterest'].idxmax()]['strike']
         pw = puts.loc[puts['openInterest'].idxmax()]['strike']
         
-        dist_c = (cw - price) / price
-        dist_p = (price - pw) / price
-        
         score = 5
         detail = "Rango Medio"
         
         if price > cw: score=10; detail="🚀 Breakout (+10)"
         elif price < pw: score=1; detail="💀 Breakdown (+1)"
-        elif dist_c < 0.02: score=2; detail="🧱 Resistencia (+2)"
-        elif dist_p < 0.02: score=9; detail="🟢 Soporte (+9)"
         else:
             rng = cw - pw
             if rng > 0:
                 pos = (price - pw) / rng
-                score = 10 - (pos * 10) # Más cerca del piso = Mejor Score de Compra
-                detail = f"Rango ${pw}-${cw}"
+                # Más cerca del piso (pos 0) = Mejor Score (10)
+                score = 10 - (pos * 10) 
+                
+                # Ajustes finos
+                if score > 8: detail = "🟢 Soporte (+9)"
+                elif score < 2: detail = "🧱 Resistencia (+2)"
+                else: detail = f"Rango ${pw}-${cw}"
                 
         return score, detail, cw, pw
     except: return 5, "Error API", 0, 0
 
 def get_seasonality_score(df):
-    """0-10 Score basado en el mes actual históricamente"""
     try:
         curr_month = datetime.now().month
         m_ret = df['Close'].resample('ME').last().pct_change()
@@ -180,7 +174,6 @@ def analyze_complete(ticker):
         s_opt, d_opt, cw, pw = get_options_score(ticker, price)
         s_sea, d_sea = get_seasonality_score(df)
         
-        # Ponderación: 40% Tec / 30% Estructura / 30% Estacional
         final = (s_tec * 4) + (s_opt * 3) + (s_sea * 3)
         
         verdict = "NEUTRAL"
@@ -203,10 +196,7 @@ with st.sidebar:
     st.header("⚙️ Panel de Control")
     st.info(f"Base de Datos: {len(CEDEAR_DATABASE)} Activos")
     
-    # 1. Configurar Lote
     batch_size = st.slider("Tamaño del Lote", 1, 15, 5)
-    
-    # Creamos lotes
     batches = [CEDEAR_DATABASE[i:i + batch_size] for i in range(0, len(CEDEAR_DATABASE), batch_size)]
     batch_labels = [f"Lote {i+1}: {b[0]} ... {b[-1]}" for i, b in enumerate(batches)]
     
@@ -214,21 +204,20 @@ with st.sidebar:
     
     col_b1, col_b2 = st.columns(2)
     if col_b1.button("▶️ ESCANEAR", type="primary"):
-        # Lógica de escaneo
         targets = batches[sel_batch]
         prog = st.progress(0)
         status = st.empty()
         
-        # Filtrar duplicados en memoria
-        mem_tickers = [x['Ticker'] for x in st.session_state['st360_results']]
+        # Filtrar duplicados
+        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v2']]
         to_run = [t for t in targets if t not in mem_tickers]
         
         for i, t in enumerate(to_run):
             status.markdown(f"🔍 Analizando **{t}**...")
             res = analyze_complete(t)
-            if res: st.session_state['st360_results'].append(res)
+            if res: st.session_state['st360_db_v2'].append(res)
             prog.progress((i+1)/len(to_run))
-            time.sleep(0.5) # Pequeño delay
+            time.sleep(0.5)
             
         status.success("✅ Listo")
         time.sleep(1)
@@ -237,12 +226,11 @@ with st.sidebar:
         st.rerun()
         
     if col_b2.button("🗑️ Limpiar"):
-        st.session_state['st360_results'] = []
+        st.session_state['st360_db_v2'] = []
         st.rerun()
 
     st.divider()
     
-    # 2. Análisis Individual
     st.markdown("### 🎯 Búsqueda Rápida")
     manual_t = st.text_input("Ticker (Ej: NVO, ASML):").upper().strip()
     if st.button("Analizar Individual"):
@@ -250,9 +238,8 @@ with st.sidebar:
             with st.spinner("Procesando..."):
                 res = analyze_complete(manual_t)
                 if res:
-                    # Actualizar si existe
-                    st.session_state['st360_results'] = [x for x in st.session_state['st360_results'] if x['Ticker'] != manual_t]
-                    st.session_state['st360_results'].append(res)
+                    st.session_state['st360_db_v2'] = [x for x in st.session_state['st360_db_v2'] if x['Ticker'] != manual_t]
+                    st.session_state['st360_db_v2'].append(res)
                     st.rerun()
                 else:
                     st.error("No se encontraron datos.")
@@ -261,9 +248,13 @@ with st.sidebar:
 st.title("🧠 SystemaTrader 360: Master Database")
 st.caption("Algoritmo de Fusión: Técnico (40%) + Estructura Gamma (30%) + Estacionalidad (30%)")
 
-if st.session_state['st360_results']:
-    df_view = pd.DataFrame(st.session_state['st360_results'])
-    df_view = df_view.sort_values("Score", ascending=False)
+if st.session_state['st360_db_v2']:
+    # Dataframe conversion
+    df_view = pd.DataFrame(st.session_state['st360_db_v2'])
+    
+    # Manejo de errores si la columna Score no existe por alguna razón rara
+    if 'Score' in df_view.columns:
+        df_view = df_view.sort_values("Score", ascending=False)
     
     # --- TABLA ---
     st.subheader("1. Tablero de Comando (Acumulado)")
@@ -284,17 +275,13 @@ if st.session_state['st360_results']:
     st.divider()
     st.subheader("2. Inspección de Activo")
     
-    # Selector
     options = df_view['Ticker'].tolist()
     selection = st.selectbox("Selecciona para ver detalle:", options)
     
-    item = next((x for x in st.session_state['st360_results'] if x['Ticker'] == selection), None)
+    item = next((x for x in st.session_state['st360_db_v2'] if x['Ticker'] == selection), None)
     
     if item:
-        # TARJETAS
         c1, c2, c3 = st.columns(3)
-        
-        # Color dinámico
         sc = item['Score']
         clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
         
@@ -322,10 +309,8 @@ if st.session_state['st360_results']:
                 <div style="font-size: 0.8rem; color: #888;">{item['D_Opt']}</div>
             </div>""", unsafe_allow_html=True)
             
-        # ESTACIONALIDAD
         st.caption(f"📅 Estacionalidad: **{item['S_Sea']:.1f}/10** - {item['D_Sea']}")
         
-        # GRÁFICO
         st.markdown(f"#### 📉 Gráfico: {selection}")
         hist = item['History']
         cw, pw = item['CW'], item['PW']
