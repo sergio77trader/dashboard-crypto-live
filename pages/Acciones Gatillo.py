@@ -87,80 +87,114 @@ DB_CATEGORIES = {
         'GLD', 'SLV', 'GDX'
     ]
 }
-
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- INICIALIZAR ESTADO (VERSIÓN V3 PARA LIMPIAR MEMORIA VIEJA) ---
-if 'st360_db_v3' not in st.session_state:
-    st.session_state['st360_db_v3'] = []
+# --- INICIALIZAR ESTADO (V4 para limpiar caché anterior) ---
+if 'st360_db_v4' not in st.session_state:
+    st.session_state['st360_db_v4'] = []
 
 # --- MOTOR DE CÁLCULO ---
 
+# 1. TÉCNICO MULTI-TEMPORAL
+def calculate_ha_candle(df):
+    """Auxiliar: Devuelve True si la última vela HA es verde"""
+    if df.empty: return False
+    ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
+    last = df.index[-1]
+    return ha_close[last] > ha_open[last]
+
 def get_technical_score(df):
     try:
-        ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-        ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
+        score = 0
+        details = []
         
-        last = df.index[-1]
-        is_green = ha_close[last] > ha_open[last]
+        # A) VELAS HEIKIN ASHI (3 Pts Total)
+        # Diario
+        if calculate_ha_candle(df): 
+            score += 1; details.append("HA Diario Alcista (+1)")
+        else: details.append("HA Diario Bajista (0)")
+            
+        # Semanal
+        df_w = df.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'})
+        if calculate_ha_candle(df_w): 
+            score += 1; details.append("HA Semanal Alcista (+1)")
+        else: details.append("HA Semanal Bajista (0)")
         
+        # Mensual
+        df_m = df.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last'})
+        if calculate_ha_candle(df_m): 
+            score += 1; details.append("HA Mensual Alcista (+1)")
+        else: details.append("HA Mensual Bajista (0)")
+
+        # B) MEDIAS MÓVILES (7 Pts Total)
         price = df['Close'].iloc[-1]
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         ma50 = df['Close'].rolling(50).mean().iloc[-1]
         ma200 = df['Close'].rolling(200).mean().iloc[-1]
         
-        score = 0
-        details = []
-        
-        # Lógica de Puntos Explicada
-        if is_green: score += 3; details.append("Vela Heikin Ashi Alcista (+3)")
-        else: details.append("Vela Heikin Ashi Bajista (0)")
-            
-        if price > ma20: score += 2; details.append("Precio > Media Móvil 20 (+2)")
-        else: details.append("Precio < Media Móvil 20 (0)")
+        if price > ma20: score += 2; details.append("Precio > MA20 (+2)")
+        else: details.append("Precio < MA20 (0)")
 
         if ma20 > ma50: score += 3; details.append("Tendencia Sana (MA20 > MA50) (+3)")
-        else: details.append("Tendencia Débil (MA20 < MA50) (0)")
+        else: details.append("Tendencia Débil (0)")
 
-        if price > ma200: score += 2; details.append("Tendencia Largo Plazo (Precio > MA200) (+2)")
+        if price > ma200: score += 2; details.append("Tendencia Largo Plazo (>MA200) (+2)")
         else: details.append("Debajo MA200 (0)")
         
         return min(score, 10), details
     except: return 0, ["Error Datos"]
 
+# 2. ESTRUCTURA DE OPCIONES + MAX PAIN
 def get_options_score(ticker, price):
     try:
         tk = yf.Ticker(ticker)
         exps = tk.options
-        if not exps: return 5, "Sin Opciones (Neutral)", 0, 0
+        if not exps: return 5, "Sin Opciones", 0, 0, 0
         
         opt = tk.option_chain(exps[0])
         calls = opt.calls
         puts = opt.puts
         
-        if calls.empty or puts.empty: return 5, "Data Vacía", 0, 0
+        if calls.empty or puts.empty: return 5, "Data Vacía", 0, 0, 0
         
+        # Muros
         cw = calls.loc[calls['openInterest'].idxmax()]['strike']
         pw = puts.loc[puts['openInterest'].idxmax()]['strike']
         
+        # CÁLCULO MAX PAIN
+        strikes = sorted(list(set(calls['strike'].tolist() + puts['strike'].tolist())))
+        # Filtramos strikes muy lejanos para optimizar velocidad
+        relevant_strikes = [s for s in strikes if price * 0.7 < s < price * 1.3]
+        if not relevant_strikes: relevant_strikes = strikes # Fallback
+        
+        cash_values = []
+        for s in relevant_strikes:
+            call_loss = calls.apply(lambda r: max(0, s - r['strike']) * r['openInterest'], axis=1).sum()
+            put_loss = puts.apply(lambda r: max(0, r['strike'] - s) * r['openInterest'], axis=1).sum()
+            cash_values.append(call_loss + put_loss)
+            
+        max_pain = relevant_strikes[np.argmin(cash_values)] if cash_values else price
+
+        # CÁLCULO DE SCORE (Basado en Muros)
         score = 5
         detail = "Rango Medio"
         
-        if price > cw: score=10; detail="🚀 Breakout Gamma (Precio > Call Wall)"
-        elif price < pw: score=1; detail="💀 Breakdown Gamma (Precio < Put Wall)"
+        if price > cw: score=10; detail="🚀 Breakout Gamma"
+        elif price < pw: score=1; detail="💀 Breakdown Gamma"
         else:
             rng = cw - pw
             if rng > 0:
                 pos = (price - pw) / rng
-                score = 10 - (pos * 10) 
+                score = 10 - (pos * 10)
+                if score > 8: detail = "🟢 Soporte (Put Wall)"
+                elif score < 2: detail = "🧱 Resistencia (Call Wall)"
+                else: detail = f"Rango ${pw}-${cw}"
                 
-                if score > 8: detail = "🟢 En Zona de Soporte (Put Wall)"
-                elif score < 2: detail = "🧱 En Zona de Resistencia (Call Wall)"
-                else: detail = f"Navegando Rango (${pw} - ${cw})"
-                
-        return score, detail, cw, pw
-    except: return 5, "Error API", 0, 0
+        return score, detail, cw, pw, max_pain
+    except: return 5, "Error API", 0, 0, 0
 
+# 3. ESTACIONALIDAD
 def get_seasonality_score(df):
     try:
         curr_month = datetime.now().month
@@ -171,9 +205,10 @@ def get_seasonality_score(df):
         
         win = (hist > 0).mean()
         score = win * 10
-        return score, f"WinRate Histórico: {win:.0%}"
+        return score, f"WinRate: {win:.0%}"
     except: return 5, "Error Estacional"
 
+# --- FUNCIÓN MAESTRA ---
 def analyze_complete(ticker):
     try:
         tk = yf.Ticker(ticker)
@@ -183,10 +218,11 @@ def analyze_complete(ticker):
         price = df['Close'].iloc[-1]
         
         s_tec, d_tec_list = get_technical_score(df)
-        d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d]) 
-        if not d_tec_str: d_tec_str = "Sin señales positivas" # Fallback por si no hay nada
+        d_tec_str = ", ".join([d for d in d_tec_list if "(+" in d])
+        if not d_tec_str: d_tec_str = "Sin señales positivas"
         
-        s_opt, d_opt, cw, pw = get_options_score(ticker, price)
+        # Ahora desempaquetamos Max Pain también
+        s_opt, d_opt, cw, pw, max_pain = get_options_score(ticker, price)
         s_sea, d_sea = get_seasonality_score(df)
         
         final = (s_tec * 4) + (s_opt * 3) + (s_sea * 3)
@@ -202,7 +238,8 @@ def analyze_complete(ticker):
             "S_Tec": s_tec, "D_Tec_List": d_tec_list, "D_Tec_Str": d_tec_str,
             "S_Opt": s_opt, "D_Opt": d_opt,
             "S_Sea": s_sea, "D_Sea": d_sea,
-            "CW": cw, "PW": pw, "History": df
+            "CW": cw, "PW": pw, "Max_Pain": max_pain, # Guardamos Max Pain
+            "History": df
         }
     except: return None
 
@@ -223,13 +260,13 @@ with st.sidebar:
         prog = st.progress(0)
         status = st.empty()
         
-        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v3']]
+        mem_tickers = [x['Ticker'] for x in st.session_state['st360_db_v4']]
         to_run = [t for t in targets if t not in mem_tickers]
         
         for i, t in enumerate(to_run):
             status.markdown(f"🔍 Analizando **{t}**...")
             res = analyze_complete(t)
-            if res: st.session_state['st360_db_v3'].append(res)
+            if res: st.session_state['st360_db_v4'].append(res)
             prog.progress((i+1)/len(to_run))
             time.sleep(0.5)
             
@@ -240,7 +277,7 @@ with st.sidebar:
         st.rerun()
         
     if col_b2.button("🗑️ Limpiar"):
-        st.session_state['st360_db_v3'] = []
+        st.session_state['st360_db_v4'] = []
         st.rerun()
 
     st.divider()
@@ -252,8 +289,8 @@ with st.sidebar:
             with st.spinner("Procesando..."):
                 res = analyze_complete(manual_t)
                 if res:
-                    st.session_state['st360_db_v3'] = [x for x in st.session_state['st360_db_v3'] if x['Ticker'] != manual_t]
-                    st.session_state['st360_db_v3'].append(res)
+                    st.session_state['st360_db_v4'] = [x for x in st.session_state['st360_db_v4'] if x['Ticker'] != manual_t]
+                    st.session_state['st360_db_v4'].append(res)
                     st.rerun()
                 else:
                     st.error("No se encontraron datos.")
@@ -262,8 +299,8 @@ with st.sidebar:
 st.title("🧠 SystemaTrader 360: Master Database")
 st.caption("Algoritmo de Fusión: Técnico (40%) + Estructura Gamma (30%) + Estacionalidad (30%)")
 
-if st.session_state['st360_db_v3']:
-    df_view = pd.DataFrame(st.session_state['st360_db_v3'])
+if st.session_state['st360_db_v4']:
+    df_view = pd.DataFrame(st.session_state['st360_db_v4'])
     
     if 'Score' in df_view.columns:
         df_view = df_view.sort_values("Score", ascending=False)
@@ -290,22 +327,19 @@ if st.session_state['st360_db_v3']:
     options = df_view['Ticker'].tolist()
     selection = st.selectbox("Selecciona para ver detalle:", options)
     
-    item = next((x for x in st.session_state['st360_db_v3'] if x['Ticker'] == selection), None)
+    item = next((x for x in st.session_state['st360_db_v4'] if x['Ticker'] == selection), None)
     
     if item:
         c1, c2, c3 = st.columns(3)
         sc = item['Score']
         clr = "#00C853" if sc >= 70 else "#D32F2F" if sc <= 40 else "#FBC02D"
         
-        # Uso .get para mayor seguridad contra errores futuros
-        tec_str_safe = item.get('D_Tec_Str', 'Sin datos')
-        
         with c1:
             st.markdown(f"""
             <div class="metric-card">
                 <div class="score-label">TÉCNICO (40%)</div>
                 <div class="big-score" style="color: #555;">{item['S_Tec']:.1f}<span style="font-size:1rem">/10</span></div>
-                <div style="font-size: 0.8rem; color: #888;">{tec_str_safe}</div>
+                <div style="font-size: 0.8rem; color: #888;">{item['D_Tec_Str']}</div>
             </div>""", unsafe_allow_html=True)
             
         with c2:
@@ -317,11 +351,13 @@ if st.session_state['st360_db_v3']:
             </div>""", unsafe_allow_html=True)
             
         with c3:
+            # Mostramos diagnóstico de opciones Y Max Pain
             st.markdown(f"""
             <div class="metric-card">
                 <div class="score-label">ESTRUCTURA (30%)</div>
                 <div class="big-score" style="color: #555;">{item['S_Opt']:.1f}<span style="font-size:1rem">/10</span></div>
                 <div style="font-size: 0.8rem; color: #888;">{item['D_Opt']}</div>
+                <div style="font-size: 0.9rem; margin-top:5px; font-weight:bold; color:#0D47A1;">🧲 Imán (Max Pain): ${item['Max_Pain']:.2f}</div>
             </div>""", unsafe_allow_html=True)
             
         st.caption(f"📅 Estacionalidad: **{item['S_Sea']:.1f}/10** - {item['D_Sea']}")
@@ -344,19 +380,15 @@ if st.session_state['st360_db_v3']:
             ### Desglose Detallado:
             
             **1. Análisis Técnico (Max 10 pts):**
-            Evaluamos la tendencia y fuerza relativa.
+            Evaluamos la tendencia en múltiples temporalidades (Matriz Heikin Ashi).
             """)
             
-            # Lista de detalles técnicos con seguridad (.get)
             detalles_lista = item.get('D_Tec_List', [])
             if detalles_lista:
                 for det in detalles_lista:
-                    if "(+" in det:
-                        st.markdown(f"- ✅ {det}")
-                    else:
-                        st.markdown(f"- ❌ {det}")
-            else:
-                st.markdown("- Sin detalles técnicos disponibles.")
+                    if "(+" in det: st.markdown(f"- ✅ {det}")
+                    else: st.markdown(f"- ❌ {det}")
+            else: st.markdown("- Sin detalles técnicos disponibles.")
                     
             st.markdown(f"""
             **2. Estructura de Opciones (Max 10 pts):**
@@ -364,6 +396,7 @@ if st.session_state['st360_db_v3']:
             - **Precio Actual:** ${item['Price']:.2f}
             - **Call Wall (Resistencia):** ${item['CW']:.2f}
             - **Put Wall (Soporte):** ${item['PW']:.2f}
+            - **Max Pain (Imán Teórico):** ${item['Max_Pain']:.2f}
             - **Diagnóstico:** {item['D_Opt']} (Buscamos comprar cerca del soporte o al romper resistencia).
             
             **3. Estacionalidad (Max 10 pts):**
@@ -374,7 +407,7 @@ if st.session_state['st360_db_v3']:
         # GRÁFICO
         st.markdown(f"#### 📉 Gráfico: {selection}")
         hist = item['History']
-        cw, pw = item['CW'], item['PW']
+        cw, pw, mp = item['CW'], item['PW'], item['Max_Pain']
         
         fig = go.Figure(data=[go.Candlestick(
             x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='Precio'
@@ -383,6 +416,8 @@ if st.session_state['st360_db_v3']:
         if cw > 0:
             fig.add_hline(y=cw, line_dash="dash", line_color="red", annotation_text=f"Call Wall ${cw}")
             fig.add_hline(y=pw, line_dash="dash", line_color="green", annotation_text=f"Put Wall ${pw}")
+            # Agregamos línea de Max Pain
+            fig.add_hline(y=mp, line_dash="dot", line_color="blue", annotation_text=f"Max Pain ${mp}")
             
         fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white", margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
