@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="SystemaTrader 360: Fundamental Filters")
+st.set_page_config(layout="wide", page_title="SystemaTrader 360: Platinum V3 Fixed")
 
 # --- ESTILOS CSS ---
 st.markdown("""
@@ -46,8 +46,9 @@ DB_CATEGORIES = {
 }
 CEDEAR_DATABASE = sorted(list(set([item for sublist in DB_CATEGORIES.values() for item in sublist])))
 
-# --- ESTADO (V14 - Filter Update) ---
-if 'st360_db_v14' not in st.session_state: st.session_state['st360_db_v14'] = []
+# --- ESTADO (V15 - FIX CRASH) ---
+# Cambiamos el nombre de la variable para forzar limpieza de memoria
+if 'st360_db_v15' not in st.session_state: st.session_state['st360_db_v15'] = []
 
 # --- HELPERS MATEMÁTICOS ---
 def calculate_rsi(series, period=14):
@@ -187,10 +188,7 @@ def get_seasonality_score(df):
     except: return 5, "N/A", 0
 
 def get_fundamental_score(tk_obj):
-    score = 0; details = []
-    # Tags para filtrado
-    tags = []
-    
+    score = 0; details = []; tags = []
     try:
         info = tk_obj.info
         if not info: return 5, ["Sin datos"], []
@@ -232,17 +230,13 @@ def get_fundamental_score(tk_obj):
 def analyze_complete(ticker):
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="10y") # Aumentado a 10y para mejor estacionalidad
+        df = tk.history(period="10y") 
         if df.empty: return None
         price = df['Close'].iloc[-1]
         
         s_tec, d_tec, rsi = get_technical_score(df)
-        d_tec_str = ", ".join([d for d in d_tec if "(+" in d])
-        
         s_opt, d_opt, cw, pw, mp, sent, pcr = get_options_data(ticker, price, tk)
         s_sea, d_sea, avg_ret = get_seasonality_score(df)
-        
-        # Fundamental devuelve tags ahora
         s_fun, d_fun, fun_tags = get_fundamental_score(tk)
         
         atr = calculate_atr(df).iloc[-1]
@@ -257,7 +251,7 @@ def analyze_complete(ticker):
         elif final <= 30: verdict = "💀 VENTA FUERTE"
         elif final <= 45: verdict = "🔻 VENTA"
         
-        # Parseo de WinRate para filtro
+        # Parsing WR
         wr_val = 0
         if "WR:" in d_sea:
             try: wr_val = float(d_sea.split("%")[0].split(":")[-1].strip())
@@ -288,16 +282,17 @@ with st.sidebar:
     if c1.button("▶️ ESCANEAR", type="primary"):
         targets = batches[sel_batch]
         prog = st.progress(0)
-        mem = [x['Ticker'] for x in st.session_state['st360_db_v14']]
+        # USAMOS V15 PARA EVITAR ERROR
+        mem = [x['Ticker'] for x in st.session_state['st360_db_v15']]
         run = [t for t in targets if t not in mem]
         for i, t in enumerate(run):
             r = analyze_complete(t)
-            if r: st.session_state['st360_db_v14'].append(r)
+            if r: st.session_state['st360_db_v15'].append(r)
             prog.progress((i+1)/len(run))
             time.sleep(0.5) 
         prog.empty(); st.rerun()
         
-    if c2.button("🗑️ Limpiar"): st.session_state['st360_db_v14'] = []; st.rerun()
+    if c2.button("🗑️ Limpiar"): st.session_state['st360_db_v15'] = []; st.rerun()
     st.divider()
     mt = st.text_input("Ticker Manual:").upper().strip()
     if st.button("Analizar"):
@@ -305,74 +300,71 @@ with st.sidebar:
             with st.spinner("Descargando Fundamentales..."):
                 r = analyze_complete(mt)
                 if r:
-                    st.session_state['st360_db_v14'] = [x for x in st.session_state['st360_db_v14'] if x['Ticker']!=mt]
-                    st.session_state['st360_db_v14'].append(r)
+                    st.session_state['st360_db_v15'] = [x for x in st.session_state['st360_db_v15'] if x['Ticker']!=mt]
+                    st.session_state['st360_db_v15'].append(r)
                     st.rerun()
 
 st.title("SystemaTrader 360: Fundamental Edition")
 
-if st.session_state['st360_db_v14']:
-    dfv = pd.DataFrame(st.session_state['st360_db_v14'])
+if st.session_state['st360_db_v15']:
+    dfv = pd.DataFrame(st.session_state['st360_db_v15'])
     if 'Score' in dfv.columns: dfv = dfv.sort_values("Score", ascending=False)
     
-    # Pre-cálculo para filtros (Categorías)
-    dfv['RSI_Cat'] = dfv['RSI'].apply(lambda x: "⚠️ Sobrecompra" if x>70 else ("♻️ Sobreventa" if x<30 else "✅ Sano"))
+    # Pre-cálculo filtros
+    dfv['RSI_Cat'] = dfv['RSI'].apply(lambda x: "⚠️" if x>70 else ("♻️" if x<30 else "✅"))
     
     def get_tec_trend(tech_list):
         if "MA20 > MA50" in tech_list: return "📈 Alcista"
         if "Debajo MA200" in tech_list: return "📉 Bajista"
         return "⚖️ Lateral"
-    dfv['Trend_Cat'] = dfv['D_Tec'].apply(get_tec_trend)
+    
+    # Check robusto por si la lista está vacía
+    dfv['Trend_Cat'] = dfv['D_Tec'].apply(lambda x: get_tec_trend(x) if isinstance(x, list) else "N/A")
     
     # FILTROS AVANZADOS
     with st.expander("🔍 FILTROS AVANZADOS (Click para abrir)", expanded=True):
         t1, t2, t3, t4 = st.tabs(["📊 Técnico", "💎 Fundamental", "🧱 Estructura", "📅 Estacional"])
         
-        # 1. Técnico
         with t1:
             c1, c2 = st.columns(2)
-            with c1: f_rsi = st.multiselect("Estado RSI:", ["✅ Sano", "⚠️ Sobrecompra", "♻️ Sobreventa"])
+            with c1: f_rsi = st.multiselect("Estado RSI:", ["✅", "⚠️", "♻️"])
             with c2: f_trend = st.multiselect("Tendencia (Medias):", ["📈 Alcista", "📉 Bajista", "⚖️ Lateral"])
             
-        # 2. Fundamental
         with t2:
-            st.caption("Filtra por etiquetas de calidad detectadas:")
-            all_tags = sorted(list(set([t for sublist in dfv['Fun_Tags'] for t in sublist])))
-            f_fund = st.multiselect("Calidad / Valor:", all_tags)
+            st.caption("Filtra por etiquetas de calidad:")
+            # Fix robusto para evitar KeyError si la columna no existe o está vacía
+            if 'Fun_Tags' in dfv.columns:
+                all_tags = sorted(list(set([t for sublist in dfv['Fun_Tags'] if isinstance(sublist, list) for t in sublist])))
+                f_fund = st.multiselect("Calidad / Valor:", all_tags)
+            else:
+                f_fund = []
+                st.warning("No hay datos fundamentales cargados aún.")
             
-        # 3. Estructura
         with t3:
             c1, c2 = st.columns(2)
             with c1: f_sent = st.multiselect("Sentimiento Opciones:", ["🚀 EUFORIA", "🐻 MIEDO", "⚖️ NEUTRAL"])
             with c2: f_wall = st.checkbox("Solo en Zona de Soporte (Cerca de Put Wall)")
             
-        # 4. Estacional
         with t4:
             f_win = st.slider("WinRate Mínimo Histórico (%)", 0, 100, 0)
 
     # --- APLICACIÓN DE FILTROS ---
     df_show = dfv.copy()
-    
-    # Filtro Score Global (Siempre visible)
     min_sc = st.slider("Filtrar por Score Mínimo Global:", 0, 100, 0)
     df_show = df_show[df_show['Score'] >= min_sc]
     
-    # Lógica de filtrado
     if f_rsi: df_show = df_show[df_show['RSI_Cat'].isin(f_rsi)]
     if f_trend: df_show = df_show[df_show['Trend_Cat'].isin(f_trend)]
     
     if f_fund: 
-        # Debe tener AL MENOS UNA de las etiquetas seleccionadas
-        df_show = df_show[df_show['Fun_Tags'].apply(lambda tags: any(x in tags for x in f_fund))]
+        df_show = df_show[df_show['Fun_Tags'].apply(lambda tags: any(x in tags for x in f_fund) if isinstance(tags, list) else False)]
         
     if f_sent:
-        # Filtrado parcial de texto (contiene la palabra)
         mask = df_show['Sentiment'].apply(lambda s: any(k in s for k in f_sent))
         df_show = df_show[mask]
         
     if f_wall:
-        # Filtra si diagnóstico dice "Soporte"
-        df_show = df_show[df_show['D_Opt'].str.contains("Soporte")]
+        df_show = df_show[df_show['D_Opt'].str.contains("Soporte", na=False)]
         
     if f_win > 0:
         df_show = df_show[df_show['WR'] >= f_win]
@@ -399,7 +391,7 @@ if st.session_state['st360_db_v14']:
         valid_tickers = df_show['Ticker'].tolist()
         if valid_tickers:
             sel = st.selectbox("Inspección Profunda (Filtrados):", valid_tickers)
-            it = next((x for x in st.session_state['st360_db_v14'] if x['Ticker'] == sel), None)
+            it = next((x for x in st.session_state['st360_db_v15'] if x['Ticker'] == sel), None)
             
             if it:
                 rsi_msg, rsi_bg, rsi_txt = get_rsi_alert(it['RSI'])
