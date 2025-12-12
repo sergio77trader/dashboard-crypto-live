@@ -8,7 +8,7 @@ import time
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Escáner Multi-Timeframe", layout="wide")
+st.set_page_config(page_title="Escáner Pro: Master Database", layout="wide")
 
 # --- ESTILOS VISUALES ---
 st.markdown("""
@@ -21,24 +21,56 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- BASE DE DATOS EXTENDIDA ---
+# --- BASE DE DATOS MASTER (CEDEARS & ADRs) ---
 TICKERS_DB = sorted([
-    # ARGENTINA
-    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX',
-    # USA BIG TECH
-    'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX', 'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR', 'SNOW', 'SHOP', 'SPOT', 'UBER', 'ABNB',
-    # SEMIS
-    'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'ARM', 'SMCI', 'TSM', 'ASML',
-    # FINANCIEROS
-    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ', 'COIN', 'BLK',
-    # CONSUMO
-    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'PG', 'JNJ', 'PFE', 'MRK', 'LLY', 'ABBV', 'UNH',
-    # INDUSTRIA
-    'XOM', 'CVX', 'SLB', 'OXY', 'HAL', 'BA', 'CAT', 'DE', 'GE', 'MMM', 'LMT', 'RTX', 'HON', 'F', 'GM', 'TM', 'HMC',
-    # GLOBAL
-    'BABA', 'JD', 'BIDU', 'NIO', 'PDD', 'TCEHY', 'TCOM', 'PBR', 'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP',
-    # ETFS
-    'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI', 'XLE', 'XLF', 'XLK', 'XLV', 'XLI', 'XLP', 'XLU', 'ARKK', 'SMH', 'GLD', 'SLV', 'GDX'
+    # --- ARGENTINA (ADRs) ---
+    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX', 'TX',
+    
+    # --- USA: BIG TECH & MAGNIFICENT 7 ---
+    'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX',
+    
+    # --- USA: SOFTWARE & CLOUD ---
+    'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR', 'SNOW', 'SHOP', 'SPOT', 'UBER', 'ABNB', 'SAP', 'INTU', 'NOW',
+    
+    # --- SEMICONDUCTORES & HARDWARE ---
+    'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'ARM', 'SMCI', 'TSM', 'ASML', 'LRCX', 'HPQ', 'DELL',
+    
+    # --- FINANCIEROS & PAGOS ---
+    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ', 'COIN', 'BLK', 'USB', 'NU',
+    
+    # --- CONSUMO MASIVO & RETAIL ---
+    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'LOW', 'PG', 'CL', 'MO', 'PM', 'KMB', 'EL',
+    
+    # --- SALUD & PHARMA ---
+    'JNJ', 'PFE', 'MRK', 'LLY', 'ABBV', 'UNH', 'BMY', 'AMGN', 'GILD', 'AZN', 'NVO', 'NVS', 'CVS',
+    
+    # --- INDUSTRIA, AEROSPACE & AGRO ---
+    'BA', 'CAT', 'DE', 'GE', 'MMM', 'LMT', 'RTX', 'HON', 'UNP', 'UPS', 'FDX', 'LUV', 'DAL',
+    
+    # --- AUTOMOTRIZ ---
+    'F', 'GM', 'TM', 'HMC', 'STLA', 'RACE',
+    
+    # --- ENERGÍA & PETRÓLEO ---
+    'XOM', 'CVX', 'SLB', 'OXY', 'HAL', 'BP', 'SHEL', 'TTE', 'PBR', 'VLO',
+    
+    # --- TELECOMUNICACIONES ---
+    'VZ', 'T', 'TMUS', 'VOD',
+    
+    # --- CHINA & ASIA ---
+    'BABA', 'JD', 'BIDU', 'NIO', 'PDD', 'TCEHY', 'TCOM', 'BEKE', 'XPEV', 'LI', 'SONY',
+    
+    # --- BRASIL & LATAM ---
+    'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GGB', 'SID', 'NBR',
+    
+    # --- MINERÍA & MATERIALES ---
+    'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP', 'ALB', 'SQM',
+    
+    # --- ETFS CLAVE ---
+    'SPY', 'QQQ', 'IWM', 'DIA', # Índices
+    'EEM', 'EWZ', 'FXI', # Regionales
+    'XLE', 'XLF', 'XLK', 'XLV', 'XLI', 'XLP', 'XLU', 'XLY', # Sectores
+    'ARKK', 'SMH', 'TAN', # Temáticos
+    'GLD', 'SLV', 'GDX' # Commodities
 ])
 
 # --- FUNCIONES DE CÁLCULO (INTACTAS) ---
@@ -121,7 +153,7 @@ def analyze_ticker(ticker, interval, period, adx_len, adx_th):
 # --- UI LATERAL ---
 with st.sidebar:
     st.header("⚙️ Centro de Comando")
-    st.info(f"Base de Datos: {len(TICKERS_DB)} Activos")
+    st.info(f"Base de Datos Master: {len(TICKERS_DB)} Activos")
     
     # Selección de Temporalidad
     interval = st.selectbox("Temporalidad de Escaneo", ["1mo", "1wk", "1d", "1h"], index=0)
@@ -146,17 +178,17 @@ with st.sidebar:
     
     st.divider()
     st.subheader("2. Lista Personalizada")
-    st.caption("Escribe tickers separados por coma (Ej: AAPL, MELI, GGAL).")
+    st.caption("Escribe tickers separados por coma (Ej: JD, VZ, DE).")
     custom_input = st.text_area("Ingresar Activos:", height=70)
     custom_btn = st.button("🔎 ANALIZAR MI LISTA")
     
     st.divider()
-    if st.button("🗑️ Borrar Todo"):
+    if st.button("🗑️ Borrar Resultados"):
         st.session_state['scan_results'] = []
         st.rerun()
 
 # --- APP PRINCIPAL ---
-st.title("🛰️ Escáner Multi-Timeframe: Señales Acumulables")
+st.title("🛰️ Escáner Multi-Timeframe: Master Database")
 
 if 'scan_results' not in st.session_state:
     st.session_state['scan_results'] = []
@@ -168,9 +200,6 @@ def process_tickers(ticker_list, selected_interval):
     new_results = []
     
     # 1. Limpieza de memoria INTELIGENTE
-    # Eliminamos solo los resultados que coincidan en Ticker Y Temporalidad con los que vamos a escanear ahora.
-    # Así permitimos que existan "AAPL (1mo)" y "AAPL (1wk)" al mismo tiempo.
-    
     current_data = st.session_state['scan_results']
     # Mantener los que NO son (Ticker actual Y Intervalo actual)
     filtered_data = [
@@ -207,6 +236,7 @@ if scan_btn:
     process_tickers(targets, interval)
 
 if custom_btn and custom_input:
+    # Limpieza de input (soporta comas, espacios, saltos de linea)
     raw_tickers = re.split(r'[,\s\n]+', custom_input)
     clean_tickers = [t.upper().strip() for t in raw_tickers if t]
     if clean_tickers:
@@ -230,7 +260,7 @@ if st.session_state['scan_results']:
     with c1:
         filter_type = st.multiselect("Tipo:", ["🟢 COMPRA", "🔴 VENTA"], default=["🟢 COMPRA", "🔴 VENTA"])
     with c2:
-        # Filtro de Temporalidad (Opcional, para limpiar la vista)
+        # Filtro de Temporalidad
         avail_intervals = list(df_results['Temporalidad'].unique())
         filter_tf = st.multiselect("Ver Temporalidad:", avail_intervals, default=avail_intervals)
     
@@ -259,8 +289,7 @@ if st.session_state['scan_results']:
     # --- VISUALIZADOR DE GRÁFICO ---
     st.subheader("📉 Backtesting Visual")
     
-    # Crear lista única para el selector: "TICKER - TF"
-    # Esto permite seleccionar específicamente el análisis de 1 Mes o de 1 Semana
+    # ID Único para el selector
     df_show['ID_Unico'] = df_show['Ticker'] + " - " + df_show['Temporalidad']
     available_options = df_show['ID_Unico'].tolist()
     
@@ -268,18 +297,16 @@ if st.session_state['scan_results']:
         selected_option = st.selectbox("Selecciona un análisis para ver el gráfico:", available_options)
         
         if selected_option:
-            # Desglosar la selección
             sel_ticker = selected_option.split(" - ")[0]
             sel_interval = selected_option.split(" - ")[1]
             
-            # Buscar datos de la señal seleccionada en la tabla
             sig_info = df_show[
                 (df_show['Ticker'] == sel_ticker) & 
                 (df_show['Temporalidad'] == sel_interval)
             ].iloc[0]
             
             with st.spinner(f"Generando gráfico de {sel_ticker} en {sel_interval}..."):
-                # Recalcular DF para graficar usando el intervalo correcto
+                # Recalcular DF para graficar
                 _, df_chart, all_signals = analyze_ticker(sel_ticker, sel_interval, period_map[sel_interval], adx_len, adx_th)
             
             if df_chart is not None:
@@ -297,7 +324,7 @@ if st.session_state['scan_results']:
                     name='Heikin Ashi'
                 ))
                 
-                # 2. Backtesting (Señales)
+                # 2. Backtesting
                 if all_signals:
                     df_sig_hist = pd.DataFrame(all_signals)
                     min_date = chart_data.index.min()
@@ -329,7 +356,7 @@ if st.session_state['scan_results']:
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.info(f"Mostrando análisis de **{sel_ticker}** en temporalidad **{sel_interval}**.")
+                st.info(f"Mostrando análisis de **{sel_ticker}** en temporalidad **{sel_interval}**. Última señal el {sig_info['Fecha_Str']}.")
 
     else:
         st.info("No hay activos disponibles.")
