@@ -5,7 +5,7 @@ import numpy as np
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(layout="wide", page_title="Crypto-Radar 360: Sniper V2.2")
+st.set_page_config(layout="wide", page_title="Crypto-Radar 360: Sniper V2.3")
 
 # --- ESTILOS VISUALES ---
 st.markdown("""
@@ -37,6 +37,10 @@ st.markdown("""
         background-color: rgba(255, 155, 0, 0.1);
     }
     @keyframes pulse { 0% {opacity: 1;} 50% {opacity: 0.5;} 100% {opacity: 1;} }
+    
+    .audit-text { font-size: 0.9rem; color: #ccc; margin-bottom: 5px; }
+    .audit-check { color: #3fb950; font-weight: bold; }
+    .audit-cross { color: #f85149; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,7 +55,7 @@ CRYPTO_DB = {
     '👵 Legacy': ['LTC-USD', 'BCH-USD', 'ETC-USD', 'XMR-USD', 'XLM-USD', 'EOS-USD']
 }
 
-if 'crypto_acc_v2' not in st.session_state: st.session_state['crypto_acc_v2'] = []
+if 'crypto_acc_v3' not in st.session_state: st.session_state['crypto_acc_v3'] = []
 
 # --- INDICADORES ---
 def calculate_indicators(df):
@@ -106,40 +110,58 @@ def analyze_coin(ticker, df_hist):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         
-        score = 5
-        reasons = []
-        alerts = []
+        # AUDITORÍA DETALLADA
+        audit_log = []
+        score = 5 # Base Neutral
         
-        # 1. Tendencia
+        # 1. Tendencia (EMA Cross)
         if last['EMA8'] > last['EMA21']: 
-            score += 2; 
-            if last['Close'] > last['EMA8']: score += 1
+            score += 2
+            audit_log.append("✅ Tendencia Alcista (EMA8 > EMA21) [+2]")
+            if last['Close'] > last['EMA8']: 
+                score += 1
+                audit_log.append("✅ Momentum Fuerte (Precio > EMA8) [+1]")
         else:
-            score -= 2; 
-            if last['Close'] < last['EMA8']: score -= 1
+            score -= 2
+            audit_log.append("❌ Tendencia Bajista (EMA8 < EMA21) [-2]")
+            if last['Close'] < last['EMA8']: 
+                score -= 1
+                audit_log.append("❌ Momentum Débil (Precio < EMA8) [-1]")
             
-        # 2. ADX
+        # 2. ADX (Fuerza)
         if last['ADX'] > 25:
-            reasons.append(f"ADX Fuerte ({last['ADX']:.0f})")
-            score += 1 if score > 5 else -1
+            audit_log.append(f"💪 Tendencia con Fuerza (ADX {last['ADX']:.0f} > 25)")
+            score += 1 if score > 5 else -1 # Potencia la dirección
         else:
-            reasons.append("Rango/Ruido")
+            audit_log.append(f"💤 Mercado Lateral/Ruido (ADX {last['ADX']:.0f} < 25) -> Score tiende a 5")
+            # Pull to neutral
             if score > 5: score -= 1
             if score < 5: score += 1
             
         # 3. Squeeze
         avg_bw = df['BandWidth'].rolling(50).mean().iloc[-1]
-        if last['BandWidth'] < (avg_bw * 0.9): alerts.append("💣 SQUEEZE")
+        is_squeeze = False
+        if last['BandWidth'] < (avg_bw * 0.9): 
+            is_squeeze = True
+            audit_log.append("💣 BOLLINGER SQUEEZE DETECTADO (Alerta de Explosión)")
             
         # 4. Volumen
-        if last['RVOL'] > 2.0:
+        rvol = last['RVOL']
+        if rvol > 2.0:
             score += 2 if score > 5 else -2
-            alerts.append(f"🔥 VOL x{last['RVOL']:.1f}")
+            audit_log.append(f"🔥 Volumen Climático (x{rvol:.1f}) [Magnifica Señal]")
+        elif rvol < 0.5:
+            audit_log.append("🧊 Volumen muy bajo (Poco interés)")
             
-        # Señal
+        # Señal Final
         signal = "ESPERAR ✋"
         if score >= 8 and last['ADX'] > 20: signal = "LONG 🟢"
         elif score <= 2 and last['ADX'] > 20: signal = "SHORT 🔴"
+        
+        # Alertas simples para la tarjeta
+        alerts = []
+        if is_squeeze: alerts.append("💣 SQUEEZE")
+        if rvol > 1.5: alerts.append(f"⚡ VOL x{rvol:.1f}")
         
         return {
             "Ticker": ticker.replace("-USD", ""),
@@ -149,7 +171,7 @@ def analyze_coin(ticker, df_hist):
             "Score": score,
             "RVOL": last['RVOL'],
             "ADX": last['ADX'],
-            "Reasons": " | ".join(reasons),
+            "Audit": audit_log, # Lista detallada para el explicador
             "Alerts": alerts
         }
     except: return None
@@ -159,33 +181,60 @@ def run_scan(target_list):
     prog = st.progress(0)
     st_txt = st.empty()
     
-    current_tickers = [x['Ticker'] for x in st.session_state['crypto_acc_v2']]
+    current_tickers = [x['Ticker'] for x in st.session_state['crypto_acc_v3']]
+    
     clean_targets = []
+    # FIX DE LA LISTA MANUAL
     for t in target_list:
-        clean_t = t.replace("-USD", "").strip()
+        # Limpieza básica: Sacar espacios, poner mayúsculas
+        clean_t = t.strip().upper()
+        
+        # Si dice USDT, cambiar a USD (Yahoo usa -USD)
+        if clean_t.endswith("USDT"):
+            clean_t = clean_t.replace("USDT", "")
+        # Si dice USD al final sin guion (ej BTCUSD), arreglar
+        elif clean_t.endswith("USD") and not clean_t.endswith("-USD"):
+            clean_t = clean_t.replace("USD", "")
+        
+        # Quitar el -USD si el usuario lo puso, para estandarizar
+        clean_t = clean_t.replace("-USD", "")
+        
+        # Verificar si ya está en memoria
         if clean_t not in current_tickers:
+            # Reconstruir formato Yahoo
             clean_targets.append(f"{clean_t}-USD")
     
     if not clean_targets:
-        st.toast("Monedas ya en lista.", icon="ℹ️")
+        st.toast("Monedas ya en lista o formato inválido.", icon="ℹ️")
+        prog.empty()
         return
 
     st_txt.text(f"Conectando para {len(clean_targets)} activos...")
     try:
         data = yf.download(clean_targets, period="3mo", group_by='ticker', progress=False)
         new_results = []
-        for i, t in enumerate(clean_targets):
+        
+        # Caso especial: Si solo es 1 activo, yfinance no devuelve MultiIndex a veces
+        if len(clean_targets) == 1:
+            t = clean_targets[0]
             st_txt.text(f"Procesando {t}...")
-            try:
-                if len(clean_targets) > 1: df_coin = data[t]
-                else: df_coin = data
-                df_coin = df_coin.dropna()
+            # Si data es DataFrame simple, lo usamos directo
+            df_coin = data
+            if not df_coin.empty:
                 res = analyze_coin(t, df_coin)
                 if res: new_results.append(res)
-            except: pass
-            prog.progress((i+1)/len(clean_targets))
+            prog.progress(100)
+        else:
+            for i, t in enumerate(clean_targets):
+                st_txt.text(f"Procesando {t}...")
+                try:
+                    df_coin = data[t].dropna()
+                    res = analyze_coin(t, df_coin)
+                    if res: new_results.append(res)
+                except: pass
+                prog.progress((i+1)/len(clean_targets))
         
-        st.session_state['crypto_acc_v2'].extend(new_results)
+        st.session_state['crypto_acc_v3'].extend(new_results)
         st.toast(f"Agregadas {len(new_results)} criptos.", icon="🚀")
         
     except Exception as e: st.error(f"Error: {e}")
@@ -200,7 +249,6 @@ with st.sidebar:
     btc_col = "green" if trend == "ALCISTA" else "red"
     price_display = f"${price:,.0f}" if price > 0 else "Cargando..."
     
-    # HTML SEMÁFORO
     st.markdown(f"""
     <div style='padding:10px; border:1px solid #333; border-radius:5px; text-align:center; background-color:#0d1117;'>
         <div style='font-size:0.8rem; color:#888;'>Clima Bitcoin</div>
@@ -215,21 +263,28 @@ with st.sidebar:
     if st.button("📡 Escanear Sector"): run_scan(CRYPTO_DB[narrative])
         
     st.divider()
-    custom_txt = st.text_area("Lista Manual (ej: APT, SUI):", height=70)
-    if st.button("🔎 Analizar Lista"):
+    
+    # INPUT MANUAL MEJORADO
+    st.markdown("### 📝 Lista Manual")
+    st.caption("Escribe tickers separados por coma o espacio (ej: BTC, ETH, PEPE). El sistema agrega '-USD' solo.")
+    custom_txt = st.text_area("Ingresar Criptos:", height=70)
+    
+    if st.button("🔎 Analizar Mi Lista"):
         if custom_txt:
-            raw = re.split(r'[,\s\n]+', custom_txt)
-            cl = [f"{t.upper().strip()}-USD" if not t.upper().endswith("-USD") else t.upper().strip() for t in raw if t]
-            if cl: run_scan(cl)
+            # Regex para separar por comas, espacios o saltos de linea
+            raw_list = re.split(r'[,\s\n]+', custom_txt)
+            # Filtramos vacíos
+            raw_list = [x for x in raw_list if x]
+            if raw_list: run_scan(raw_list)
                 
     st.divider()
-    if st.button("🗑️ Borrar Todo"): st.session_state['crypto_acc_v2'] = []; st.rerun()
+    if st.button("🗑️ Borrar Todo"): st.session_state['crypto_acc_v3'] = []; st.rerun()
 
 # --- MAIN ---
-st.title("🛰️ Crypto-Radar 360: Sniper V2.2")
+st.title("🛰️ Crypto-Radar 360: Sniper V2.3")
 
-if st.session_state['crypto_acc_v2']:
-    df = pd.DataFrame(st.session_state['crypto_acc_v2'])
+if st.session_state['crypto_acc_v3']:
+    df = pd.DataFrame(st.session_state['crypto_acc_v3'])
     
     c_f1, c_f2 = st.columns([3, 1])
     with c_f1:
@@ -237,7 +292,7 @@ if st.session_state['crypto_acc_v2']:
     
     if f_mode == "Solo LONG 🟢": df = df[df['Signal'].str.contains("LONG")]
     elif f_mode == "Solo SHORT 🔴": df = df[df['Signal'].str.contains("SHORT")]
-    elif f_mode == "Solo SQUEEZE 💣": df = df[df['Alerts'].apply(lambda x: "SQUEEZE" in str(x))]
+    elif f_mode == "Solo SQUEEZE 💣": df = df[df['Alerts'].apply(lambda x: any("SQUEEZE" in s for s in x))]
     
     if not df.empty:
         df['AbsScore'] = abs(df['Score'] - 5)
@@ -249,14 +304,13 @@ if st.session_state['crypto_acc_v2']:
                 sig_class = "sig-long" if "LONG" in row['Signal'] else "sig-short" if "SHORT" in row['Signal'] else "sig-wait"
                 price_col = "#3fb950" if row['Change'] > 0 else "#f85149"
                 
-                # HTML FIX: Construcción de etiquetas sin indentación que rompa el markdown
                 alert_html = ""
                 for alert in row['Alerts']:
                     cls = "sqz-anim" if "SQUEEZE" in alert else "alert-pill"
                     bg = "rgba(255, 155, 0, 0.2)" if "SQUEEZE" in alert else "rgba(100, 100, 255, 0.2)"
                     alert_html += f"<span class='alert-pill {cls}' style='background:{bg}; color:#fff;'>{alert}</span> "
                 
-                # CARD HTML COMPACTO (Sin indentación interna para evitar el bug)
+                # CARD HTML
                 html_card = f"""
 <div class="crypto-card">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
@@ -267,14 +321,40 @@ if st.session_state['crypto_acc_v2']:
     <div class="signal-box {sig_class}">{row['Signal']}</div>
     <div style="margin: 10px 0;">{alert_html}</div>
     <div style="font-size:0.75rem; color:#8b949e; border-top:1px solid #30363d; padding-top:8px;">
-        {row['Reasons']}<br>
-        <span style="opacity:0.6; display:block; margin-top:4px;">RVOL: {row['RVOL']:.1f}x | ADX: {row['ADX']:.0f}</span>
+        RVOL: {row['RVOL']:.1f}x | ADX: {row['ADX']:.0f}
     </div>
 </div>
 """
                 st.markdown(html_card, unsafe_allow_html=True)
+                
     else:
         st.info("No hay activos para el filtro seleccionado.")
+    
+    # --- SECCIÓN DE AUDITORÍA ---
+    st.divider()
+    st.subheader("3. 🔬 Auditoría de Señal")
+    st.caption("Selecciona una criptomoneda para entender por qué dio esa señal.")
+    
+    # Selector de monedas ya analizadas
+    audit_ticker = st.selectbox("Seleccionar Activo para inspeccionar:", df['Ticker'].tolist())
+    
+    # Buscar datos
+    audit_item = next((x for x in st.session_state['crypto_acc_v3'] if x['Ticker'] == audit_ticker), None)
+    
+    if audit_item:
+        with st.expander(f"Desglose de cálculo para {audit_ticker} (Score: {audit_item['Score']}/10)", expanded=True):
+            st.markdown(f"**Señal Final:** {audit_item['Signal']}")
+            st.markdown("---")
+            for log in audit_item['Audit']:
+                st.markdown(f"- {log}")
+            
+            st.markdown("---")
+            st.caption("""
+            **Explicación:**
+            *   **EMA Cross:** Buscamos que la media rápida (8) cruce la lenta (21).
+            *   **ADX:** Si es menor a 20, el mercado está lateral (peligroso operar). Si es > 25, hay tendencia real.
+            *   **RVOL:** Volumen relativo. Si es > 1.0 hay interés. Si es > 2.0 hay ballenas.
+            """)
 
 else:
-    st.info("👈 Selecciona una narrativa en el menú para comenzar.")
+    st.info("👈 Selecciona una narrativa o escribe tu lista manual para comenzar.")
