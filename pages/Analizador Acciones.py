@@ -6,181 +6,211 @@ import plotly.graph_objects as go
 import numpy as np
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Backtester de Señales HA + ADX", layout="wide")
+st.set_page_config(page_title="Backtester Pro: HA + Doble ADX", layout="wide")
+
+# --- ESTILOS VISUALES ---
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #0e1117;
+        border: 1px solid #303030;
+        padding: 15px; border-radius: 10px;
+        text-align: center;
+    }
+    .success-text { color: #00FF00; font-weight: bold; }
+    .error-text { color: #FF0000; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
 # --- FUNCIONES DE CÁLCULO ---
+
 def calculate_heikin_ashi(df):
-    """
-    Calcula Heikin Ashi de forma iterativa para coincidir con TradingView.
-    """
+    """Calcula Heikin Ashi iterativo (Precisión TradingView)"""
     df_ha = df.copy()
-    
-    # 1. HA Close
     df_ha['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     
-    # 2. HA Open (Iterativo es necesario para precisión)
     ha_open = [df['Open'].iloc[0]]
     for i in range(1, len(df)):
-        # HA Open actual = (HA Open prev + HA Close prev) / 2
         prev_open = ha_open[-1]
         prev_close = df_ha['HA_Close'].iloc[i-1]
         ha_open.append((prev_open + prev_close) / 2)
         
     df_ha['HA_Open'] = ha_open
-    
-    # 3. HA High y Low
     df_ha['HA_High'] = df_ha[['High', 'HA_Open', 'HA_Close']].max(axis=1)
     df_ha['HA_Low'] = df_ha[['Low', 'HA_Open', 'HA_Close']].min(axis=1)
     
-    # 4. Color (1 Verde, -1 Rojo)
+    # 1 Verde, -1 Rojo
     df_ha['Color'] = np.where(df_ha['HA_Close'] > df_ha['HA_Open'], 1, -1)
-    
     return df_ha
 
+@st.cache_data(ttl=3600)
 def get_data(ticker, interval, period):
     try:
         df = yf.download(ticker, interval=interval, period=period, progress=False, auto_adjust=True)
         if df.empty: return None
-        # Limpieza de columnas MultiIndex si existen
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return df
     except: return None
 
-def run_strategy(df, adx_len, adx_th):
-    # 1. Calcular ADX
-    # Pandas TA requiere columnas específicas
-    df.ta.adx(length=adx_len, append=True)
-    # Renombrar columna ADX (suele ser ADX_14)
-    adx_col = f"ADX_{adx_len}"
+def run_strategy_mtf(df_main, df_filter, adx_len, th_micro, th_macro):
+    """
+    Ejecuta la estrategia cruzando datos del Timeframe Principal y el de Filtro
+    """
+    # 1. Calcular Indicadores en DF Principal (Micro / Gatillo)
+    df_main.ta.adx(length=adx_len, append=True)
+    df_main = calculate_heikin_ashi(df_main)
+    col_adx_main = f"ADX_{adx_len}"
     
-    # 2. Calcular Heikin Ashi
-    df_ha = calculate_heikin_ashi(df)
+    # 2. Calcular Indicadores en DF Filtro (Macro / Diario)
+    # Solo necesitamos el ADX del filtro
+    df_filter.ta.adx(length=adx_len, append=True)
+    col_adx_filter = f"ADX_{adx_len}"
     
-    # 3. Simulación de Señales
+    # 3. Sincronizar Datos (Mapping)
+    # Agregamos el valor del ADX del Filtro al DF Principal basándonos en la fecha
+    # Usamos 'reindex' con 'ffill' (forward fill) para evitar mirar al futuro.
+    # El ADX Diario de ayer es el que se usa para la apertura de hoy.
+    adx_filter_aligned = df_filter[col_adx_filter].reindex(df_main.index, method='ffill')
+    df_main['ADX_Filter_Val'] = adx_filter_aligned
+
+    # 4. Simulación
     signals = []
     in_position = False
     entry_price = 0.0
-    entry_date = None
     
-    # Iteramos sobre el dataframe
-    for i in range(1, len(df_ha)):
-        date = df_ha.index[i]
-        ha_color = df_ha['Color'].iloc[i]      # 1 Verde, -1 Rojo
-        adx_val = df_ha[adx_col].iloc[i]
-        price = df_ha['Close'].iloc[i]
+    for i in range(1, len(df_main)):
+        date = df_main.index[i]
+        price = df_main['Close'].iloc[i]
         
-        # CONDICIÓN DE ENTRADA (LONG)
-        # Vela Verde + ADX > Umbral + No estamos comprados
-        if not in_position and ha_color == 1 and adx_val > adx_th:
+        # Datos Técnicos
+        ha_color = df_main['Color'].iloc[i]      # 1 = Verde
+        adx_micro_val = df_main[col_adx_main].iloc[i]
+        adx_macro_val = df_main['ADX_Filter_Val'].iloc[i]
+        
+        # --- LÓGICA DE ENTRADA (DOBLE FILTRO) ---
+        # 1. Vela Verde
+        # 2. ADX del Gráfico Actual > Umbral Micro
+        # 3. ADX del Gráfico Diario (Filtro) > Umbral Macro
+        # 4. No NaN (Datos válidos)
+        condition_buy = (
+            ha_color == 1 and 
+            adx_micro_val > th_micro and 
+            adx_macro_val > th_macro and
+            not np.isnan(adx_macro_val)
+        )
+        
+        if not in_position and condition_buy:
             in_position = True
             entry_price = price
-            entry_date = date
             signals.append({
-                'Fecha': date,
-                'Tipo': '🟢 COMPRA',
-                'Precio': price,
-                'ADX': adx_val,
-                'Resultado': '-'
+                'Fecha': date, 'Tipo': '🟢 COMPRA', 'Precio': price,
+                'ADX Gatillo': adx_micro_val, 'ADX Filtro': adx_macro_val, 'Resultado': '-'
             })
             
-        # CONDICIÓN DE SALIDA (EXIT)
-        # Vela se vuelve Roja + Estamos comprados
+        # --- LÓGICA DE SALIDA ---
+        # Vela se pone Roja
         elif in_position and ha_color == -1:
             in_position = False
             pnl = ((price - entry_price) / entry_price) * 100
             signals.append({
-                'Fecha': date,
-                'Tipo': '🔴 VENTA',
-                'Precio': price,
-                'ADX': adx_val,
-                'Resultado': f"{pnl:.2f}%"
+                'Fecha': date, 'Tipo': '🔴 VENTA', 'Precio': price,
+                'ADX Gatillo': adx_micro_val, 'ADX Filtro': adx_macro_val, 'Resultado': f"{pnl:.2f}%"
             })
             
-    return pd.DataFrame(signals), df_ha
+    return pd.DataFrame(signals), df_main
 
 # --- UI STREAMLIT ---
-st.title("🔎 Detector de Señales Históricas (Clon TradingView)")
+st.title("🔎 Backtester: HA Matrix + Filtro ADX")
 
 with st.sidebar:
-    st.header("Parámetros")
+    st.header("Datos del Gráfico")
     ticker = st.text_input("Ticker", "AAPL").upper()
     
-    # Configuración para replicar tu caso: Mensual
-    interval = st.selectbox("Temporalidad", ["1mo", "1wk", "1d", "1h"], index=0)
-    
-    # Para mensual necesitamos mucha historia
+    # Timeframe Principal (Gatillo)
+    interval_main = st.selectbox("Temporalidad Gráfico", ["1mo", "1wk", "1d", "1h"], index=0)
     period_map = {"1mo": "max", "1wk": "10y", "1d": "5y", "1h": "730d"}
     
     st.divider()
-    st.subheader("Estrategia")
+    
+    # --- CONFIGURACIÓN IDÉNTICA A TU FOTO ---
+    st.subheader("CONFIGURACIÓN ADX")
     adx_len = st.number_input("Longitud ADX", value=14)
-    adx_th = st.number_input("Umbral ADX (Filtro)", value=20) # En tu script era 20 el filtro macro
+    adx_th_micro = st.number_input("Umbral ADX Micro (Gatillo)", value=25)
+    
+    # Selección del Timeframe del Filtro (Por defecto Diario, como en tu foto)
+    st.markdown("---")
+    st.caption("Configuración del Filtro Macro")
+    interval_filter = st.selectbox("Temporalidad Filtro", ["1d", "1wk", "1mo"], index=0, help="Debe ser igual o menor a la del gráfico, o usar Diario para consistencia.")
+    adx_th_macro = st.number_input("Umbral ADX Diario/Filtro", value=20)
 
-    if st.button("CALCULAR SEÑALES"):
-        with st.spinner("Descargando y procesando..."):
-            df = get_data(ticker, interval, period_map[interval])
+    btn = st.button("CALCULAR ESTRATEGIA", type="primary")
+
+if btn:
+    with st.spinner("Procesando datos Multi-Timeframe..."):
+        # 1. Bajar datos Principales
+        df_main = get_data(ticker, interval_main, period_map[interval_main])
+        
+        # 2. Bajar datos de Filtro (Siempre bajamos 'max' para cubrir todo el historial del main)
+        df_filter = get_data(ticker, interval_filter, "max")
+        
+        if df_main is not None and df_filter is not None:
+            # 3. Correr Estrategia
+            res_df, df_chart = run_strategy_mtf(df_main, df_filter, adx_len, adx_th_micro, adx_th_macro)
             
-            if df is not None:
-                res_df, df_ha = run_strategy(df, adx_len, adx_th)
+            if not res_df.empty:
+                # Buscar última compra
+                buys = res_df[res_df['Tipo'] == '🟢 COMPRA']
                 
-                # --- MOSTRAR RESULTADOS ---
-                if not res_df.empty:
-                    last_signal = res_df.iloc[-1]
+                if not buys.empty:
+                    last_buy = buys.iloc[-1]
                     
-                    # MÉTRICAS DESTACADAS
-                    c1, c2, c3 = st.columns(3)
-                    
-                    # Buscamos la última COMPRA específicamente
-                    last_buy = res_df[res_df['Tipo'] == '🟢 COMPRA'].iloc[-1]
-                    
-                    c1.metric("Última Señal de COMPRA", last_buy['Fecha'].strftime('%d-%m-%Y'))
-                    c2.metric("Precio de Entrada", f"${last_buy['Precio']:.2f}")
-                    c3.metric("ADX en ese momento", f"{last_buy['ADX']:.2f}")
-                    
-                    st.divider()
-                    
-                    # TABLA COMPLETA
-                    st.subheader("📜 Historial de Alertas")
-                    # Formatear fecha
-                    res_df['Fecha'] = res_df['Fecha'].dt.strftime('%Y-%m-%d')
-                    st.dataframe(res_df.style.map(lambda x: 'color: green' if 'COMPRA' in x else 'color: red', subset=['Tipo']), use_container_width=True)
-                    
-                    # GRÁFICO
-                    st.subheader("Gráfico Heikin Ashi")
-                    
-                    # Filtramos data reciente para el gráfico (últimos 50 periodos para que se vea bien)
-                    chart_data = df_ha.tail(60) 
-                    
-                    fig = go.Figure(data=[go.Candlestick(
-                        x=chart_data.index,
-                        open=chart_data['HA_Open'],
-                        high=chart_data['HA_High'],
-                        low=chart_data['HA_Low'],
-                        close=chart_data['HA_Close'],
-                        name='Heikin Ashi'
-                    )])
-                    
-                    # Agregar marcas de compra
-                    buys = res_df[res_df['Tipo'] == '🟢 COMPRA']
-                    # Filtramos las compras que estén dentro del rango del gráfico
-                    buys_visible = buys[buys['Fecha'].isin(chart_data.index.strftime('%Y-%m-%d'))]
-                    
-                    if not buys_visible.empty:
-                        # Necesitamos volver a convertir la fecha string a datetime para plotear
-                        buy_dates = pd.to_datetime(buys_visible['Fecha'])
-                        fig.add_trace(go.Scatter(
-                            x=buy_dates,
-                            y=buys_visible['Precio'] * 0.95, # Un poco abajo de la vela
-                            mode='markers',
-                            marker=dict(symbol='triangle-up', size=15, color='blue'),
-                            name='Señal Compra'
-                        ))
+                    # MÉTRICAS
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Última Señal", last_buy['Fecha'].strftime('%d/%m/%Y'))
+                    c2.metric("Precio Entrada", f"${last_buy['Precio']:.2f}")
+                    c3.metric(f"ADX {interval_main} (Gatillo)", f"{last_buy['ADX Gatillo']:.1f}")
+                    c4.metric(f"ADX {interval_filter} (Filtro)", f"{last_buy['ADX Filtro']:.1f}")
+                
+                st.divider()
+                
+                # TABLA
+                st.subheader("📜 Bitácora de Alertas")
+                res_view = res_df.copy()
+                res_view['Fecha'] = res_view['Fecha'].dt.strftime('%Y-%m-%d')
+                
+                def color_rows(val):
+                    color = '#d4edda' if 'COMPRA' in str(val) else '#f8d7da' if 'VENTA' in str(val) else ''
+                    return f'background-color: {color}; color: black'
+                
+                st.dataframe(res_view.style.applymap(color_rows, subset=['Tipo']), use_container_width=True)
+                
+                # GRÁFICO
+                st.subheader(f"Gráfico Heikin Ashi ({interval_main})")
+                
+                # Plot últimos 100 periodos para ver detalle
+                chart_data = df_chart.tail(100)
+                
+                fig = go.Figure(data=[go.Candlestick(
+                    x=chart_data.index,
+                    open=chart_data['HA_Open'], high=chart_data['HA_High'],
+                    low=chart_data['HA_Low'], close=chart_data['HA_Close'],
+                    name='Heikin Ashi'
+                )])
+                
+                # Marcas de Compra en el gráfico
+                buy_dates = buys[buys['Fecha'].isin(chart_data.index)]
+                if not buy_dates.empty:
+                    fig.add_trace(go.Scatter(
+                        x=buy_dates['Fecha'], y=buy_dates['Precio']*0.98,
+                        mode='markers', marker=dict(symbol='triangle-up', size=15, color='#00FF00'),
+                        name='Entrada'
+                    ))
 
-                    fig.update_layout(xaxis_rangeslider_visible=False, height=500)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                else:
-                    st.warning("No se encontraron señales con estos parámetros.")
+                fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_dark")
+                st.plotly_chart(fig, use_container_width=True)
+                
             else:
-                st.error("No se encontraron datos para el ticker.")
+                st.warning("No se encontraron señales. El filtro ADX podría ser muy estricto.")
+        else:
+            st.error("Error al descargar datos. Verifica el ticker.")
