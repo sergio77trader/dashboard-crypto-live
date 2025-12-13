@@ -20,7 +20,6 @@ jobs:
           python-version: '3.10'
       
       - name: Instalar Librerías
-        # Instalamos solo lo necesario, sin pandas_ta que da problemas
         run: pip install yfinance pandas numpy requests
 
       - name: Correr Bot
