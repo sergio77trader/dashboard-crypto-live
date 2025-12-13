@@ -2,10 +2,9 @@ name: Bot Final SystemaTrader
 
 on:
   schedule:
-    # Lunes a Viernes: 09:30 AM NY (14:30 UTC), 12:00 PM NY (17:00 UTC), 03:00 PM NY (20:00 UTC)
-    - cron: '30 14 * * 1-5'
+    - cron: '0 14 * * 1-5'
     - cron: '0 17 * * 1-5'
-    - cron: '0 20 * * 1-5'
+    - cron: '30 20 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -19,7 +18,8 @@ jobs:
         with:
           python-version: '3.10'
       
-      - name: Instalar Librerías
+      - name: Instalar Solo Necesario
+        # Solo estas 4 librerías estándar. Imposible que falle.
         run: pip install yfinance pandas numpy requests
 
       - name: Correr Bot
