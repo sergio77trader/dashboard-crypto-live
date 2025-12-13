@@ -10,11 +10,11 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- CONFIGURACIÓN ESTRATEGIA ---
+# --- CONFIGURACIÓN ESPECÍFICA (Solo Mensual y Semanal) ---
 TIMEFRAMES = [
-    ("1mo", "MENSUAL", "max"),
-    ("1wk", "SEMANAL", "10y"),
-    ("1d", "DIARIO", "5y")
+    ("1mo", "MENSUAL", "max"),  # Historia completa para ADX mensual
+    ("1wk", "SEMANAL", "10y")   # 10 años para semanal
+    # ("1d", "DIARIO", "5y")    # (Opcional: Descomentar si quieres diario también)
 ]
 
 ADX_LEN = 14
@@ -50,10 +50,12 @@ def send_message(msg):
 def calculate_heikin_ashi(df):
     df_ha = df.copy()
     df_ha['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    
     ha_open = [df['Open'].iloc[0]]
     for i in range(1, len(df)):
         ha_open.append((ha_open[-1] + df_ha['HA_Close'].iloc[i-1]) / 2)
     df_ha['HA_Open'] = ha_open
+    
     df_ha['Color'] = np.where(df_ha['HA_Close'] > df_ha['HA_Open'], 1, -1)
     return df_ha
 
@@ -66,6 +68,7 @@ def calculate_adx(df, period=14):
     
     df['UpMove'] = df['High'] - df['High'].shift(1)
     df['DownMove'] = df['Low'].shift(1) - df['Low']
+    
     df['+DM'] = np.where((df['UpMove'] > df['DownMove']) & (df['UpMove'] > 0), df['UpMove'], 0)
     df['-DM'] = np.where((df['DownMove'] > df['UpMove']) & (df['DownMove'] > 0), df['DownMove'], 0)
     
@@ -84,9 +87,11 @@ def calculate_adx(df, period=14):
 def get_last_signal(df, adx_th):
     df['ADX'] = calculate_adx(df)
     df_ha = calculate_heikin_ashi(df)
+    
     last_signal = None
     in_position = False
     
+    # Recorrido histórico para encontrar la última señal real
     for i in range(1, len(df_ha)):
         color = df_ha['Color'].iloc[i]
         adx = df['ADX'].iloc[i]
@@ -141,15 +146,12 @@ def run_bot():
     # Ordenar por fecha (Más reciente primero)
     all_signals.sort(key=lambda x: x['Fecha'], reverse=True)
     
-    # Reporte de Estado
-    longs = len([x for x in all_signals if "COMPRA" in x['Tipo']])
-    shorts = len([x for x in all_signals if "VENTA" in x['Tipo']])
-    
-    send_message(f"📊 **REPORTE MULTI-TIMEFRAME**\nTotal Señales Históricas: {len(all_signals)}\n🟢 Compras Vigentes: {longs}\n🔴 Ventas Vigentes: {shorts}\n\n⬇️ *Últimas 25 Señales:* ⬇️")
+    # Cabecera
+    send_message(f"📊 **REPORTE MENSUAL Y SEMANAL**\nEnviando las últimas señales de {len(TICKERS)} activos...")
     time.sleep(1)
 
-    # Enviar las 25 más recientes
-    for s in all_signals[:25]:
+    # Enviar TODAS las señales (Sin límites)
+    for s in all_signals:
         icon = "🚨" if "VENTA" in s['Tipo'] else "🚀"
         msg = (
             f"{icon} **{s['Ticker']} ({s['TF']})**\n"
@@ -159,7 +161,10 @@ def run_bot():
             f"Fecha Señal: {s['Fecha_Str']}"
         )
         send_message(msg)
-        time.sleep(0.5)
+        # Pausa leve para que Telegram no bloquee por spam (flood limit)
+        time.sleep(0.3)
+
+    send_message("✅ Fin del reporte.")
 
 if __name__ == "__main__":
     run_bot()
