@@ -21,6 +21,7 @@ ADX_LEN = 14
 ADX_TH = 20
 
 # --- BASE DE DATOS COMPLETA ---
+# --- BASE DE DATOS COMPLETA (Actualizada) ---
 TICKERS = sorted([
     'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX', 'TX',
     'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX',
