@@ -39,7 +39,7 @@ def calculate_heikin_ashi(df):
     return df_ha
 
 def calculate_adx(df, period=14):
-    """Calcula ADX usando matemáticas puras (Más rápido y sin errores de instalación)"""
+    """Calcula ADX usando solo Pandas y Numpy (Más rápido y sin errores de instalación)"""
     df = df.copy()
     
     # True Range
@@ -126,38 +126,3 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-PASO 2: Simplificar la Instalación (bot_final.yml)
-Ahora que el código es "nativo", la instalación es facilísima y no puede fallar.
-Ve a .github/workflows/bot_final.yml.
-Borra todo y pega esto:
-code
-Yaml
-name: Bot Final SystemaTrader
-
-on:
-  schedule:
-    - cron: '0 14 * * 1-5'
-    - cron: '0 17 * * 1-5'
-    - cron: '30 20 * * 1-5'
-  workflow_dispatch:
-
-jobs:
-  ejecutar:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Python Setup
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      
-      - name: Instalar Solo Necesario
-        # Solo estas 4 librerías estándar. Imposible que falle.
-        run: pip install yfinance pandas numpy requests
-
-      - name: Correr Bot
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python alerta_bot.py
