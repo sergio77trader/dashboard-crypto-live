@@ -19,7 +19,7 @@ jobs:
           python-version: '3.10'
       
       - name: Instalar dependencias
-        # Instalamos SOLO lo que el robot necesita, sin Streamlit
+        # AQUI ESTA EL CAMBIO CLAVE: Instalamos manualmente SIN requirements.txt
         run: pip install yfinance pandas pandas_ta numpy requests
 
       - name: Ejecutar Escáner
