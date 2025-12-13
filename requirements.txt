@@ -7,3 +7,4 @@ plotly
 matplotlib
 curl_cffi
 requests
+numpy
