@@ -22,55 +22,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- BASE DE DATOS MASTER (CEDEARS & ADRs) ---
-TICKERS_DB = sorted([
-    # --- ARGENTINA (ADRs) ---
+TICKERS = sorted([
     'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX', 'TX',
-    
-    # --- USA: BIG TECH & MAGNIFICENT 7 ---
     'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX',
-    
-    # --- USA: SOFTWARE & CLOUD ---
     'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR', 'SNOW', 'SHOP', 'SPOT', 'UBER', 'ABNB', 'SAP', 'INTU', 'NOW',
-    
-    # --- SEMICONDUCTORES & HARDWARE ---
     'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'ARM', 'SMCI', 'TSM', 'ASML', 'LRCX', 'HPQ', 'DELL',
-    
-    # --- FINANCIEROS & PAGOS ---
     'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ', 'COIN', 'BLK', 'USB', 'NU',
-    
-    # --- CONSUMO MASIVO & RETAIL ---
     'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'LOW', 'PG', 'CL', 'MO', 'PM', 'KMB', 'EL',
-    
-    # --- SALUD & PHARMA ---
     'JNJ', 'PFE', 'MRK', 'LLY', 'ABBV', 'UNH', 'BMY', 'AMGN', 'GILD', 'AZN', 'NVO', 'NVS', 'CVS',
-    
-    # --- INDUSTRIA, AEROSPACE & AGRO ---
     'BA', 'CAT', 'DE', 'GE', 'MMM', 'LMT', 'RTX', 'HON', 'UNP', 'UPS', 'FDX', 'LUV', 'DAL',
-    
-    # --- AUTOMOTRIZ ---
     'F', 'GM', 'TM', 'HMC', 'STLA', 'RACE',
-    
-    # --- ENERGÍA & PETRÓLEO ---
     'XOM', 'CVX', 'SLB', 'OXY', 'HAL', 'BP', 'SHEL', 'TTE', 'PBR', 'VLO',
-    
-    # --- TELECOMUNICACIONES ---
     'VZ', 'T', 'TMUS', 'VOD',
-    
-    # --- CHINA & ASIA ---
     'BABA', 'JD', 'BIDU', 'NIO', 'PDD', 'TCEHY', 'TCOM', 'BEKE', 'XPEV', 'LI', 'SONY',
-    
-    # --- BRASIL & LATAM ---
     'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GGB', 'SID', 'NBR',
-    
-    # --- MINERÍA & MATERIALES ---
     'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP', 'ALB', 'SQM',
-    
-    # --- ETFS CLAVE ---
-    'SPY', 'QQQ', 'IWM', 'DIA', # Índices
-    'EEM', 'EWZ', 'FXI', # Regionales
-    'XLE', 'XLF', 'XLK', 'XLV', 'XLI', 'XLP', 'XLU', 'XLY', # Sectores
-    'ARKK', 'SMH', 'TAN', # Temáticos
-    'GLD', 'SLV', 'GDX' # Commodities
+    'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI', 'XLE', 'XLF', 'XLK', 'XLV', 'XLI', 'XLP', 'XLU', 'XLY', 'ARKK', 'SMH', 'TAN', 'GLD', 'SLV', 'GDX'
 ])
 
 # --- FUNCIONES DE CÁLCULO (INTACTAS) ---
