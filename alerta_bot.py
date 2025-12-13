@@ -11,59 +11,51 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # --- CONFIGURACIÓN ---
-# Analizamos Mensual, Semanal y Diario
 TIMEFRAMES = [
-    ("1mo", "MENSUAL", "max"),
-    ("1wk", "SEMANAL", "10y"),
-    ("1d", "DIARIO", "5y")
+    ("1mo", "1mo", "max"),  # Mes
+    ("1wk", "1wk", "10y"),  # Semana
+    ("1d", "1d", "5y")      # Día
 ]
 
 ADX_TH = 20
-ADX_LEN = 14
 
-# --- BASE DE DATOS EXACTA DE TU SCRIPT ---
-TICKERS = sorted([
-    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'CEPU', 'EDN', 'BFR', 'SUPV', 'CRESY', 'IRS', 'TEO', 'LOMA', 'DESP', 'VIST', 'GLOB', 'MELI', 'BIOX', 'TX',
+# --- LISTA DE ACTIVOS COMPLETA ---
+TICKERS = [
+    'GGAL', 'YPF', 'BMA', 'PAMP', 'TGS', 'MELI', 'GLOB', 'VIST', 'BIOX',
     'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX',
-    'CRM', 'ORCL', 'ADBE', 'IBM', 'CSCO', 'PLTR', 'SNOW', 'SHOP', 'SPOT', 'UBER', 'ABNB', 'SAP', 'INTU', 'NOW',
-    'AMD', 'INTC', 'QCOM', 'AVGO', 'TXN', 'MU', 'ADI', 'AMAT', 'ARM', 'SMCI', 'TSM', 'ASML', 'LRCX', 'HPQ', 'DELL',
-    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BRK-B', 'PYPL', 'SQ', 'COIN', 'BLK', 'USB', 'NU',
-    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT', 'COST', 'TGT', 'HD', 'LOW', 'PG', 'CL', 'MO', 'PM', 'KMB', 'EL',
-    'JNJ', 'PFE', 'MRK', 'LLY', 'ABBV', 'UNH', 'BMY', 'AMGN', 'GILD', 'AZN', 'NVO', 'NVS', 'CVS',
-    'BA', 'CAT', 'DE', 'GE', 'MMM', 'LMT', 'RTX', 'HON', 'UNP', 'UPS', 'FDX', 'LUV', 'DAL',
-    'F', 'GM', 'TM', 'HMC', 'STLA', 'RACE',
-    'XOM', 'CVX', 'SLB', 'OXY', 'HAL', 'BP', 'SHEL', 'TTE', 'PBR', 'VLO',
-    'VZ', 'T', 'TMUS', 'VOD',
-    'BABA', 'JD', 'BIDU', 'NIO', 'PDD', 'TCEHY', 'TCOM', 'BEKE', 'XPEV', 'LI', 'SONY',
-    'VALE', 'ITUB', 'BBD', 'ERJ', 'ABEV', 'GGB', 'SID', 'NBR',
-    'GOLD', 'NEM', 'PAAS', 'FCX', 'SCCO', 'RIO', 'BHP', 'ALB', 'SQM',
-    'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'FXI', 'XLE', 'XLF', 'XLK', 'XLV', 'XLI', 'XLP', 'XLU', 'XLY', 'ARKK', 'SMH', 'TAN', 'GLD', 'SLV', 'GDX'
-])
+    'AMD', 'INTC', 'QCOM', 'AVGO', 'TSM', 'MU',
+    'JPM', 'BAC', 'C', 'WFC', 'GS', 'MS', 'V', 'MA',
+    'KO', 'PEP', 'MCD', 'SBUX', 'DIS', 'NKE', 'WMT',
+    'XOM', 'CVX', 'SLB', 'BA', 'CAT', 'GE',
+    'BABA', 'JD', 'BIDU', 'PBR', 'VALE', 'ITUB',
+    'SPY', 'QQQ', 'IWM', 'DIA', 'EEM', 'EWZ', 'XLE', 'XLF', 'ARKK', 'GLD', 'SLV'
+]
 
 def send_message(msg):
     if not TELEGRAM_TOKEN or not CHAT_ID: return
-    # Manejo de límites de Telegram (4096 caracteres)
-    if len(msg) > 4000:
-        parts = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+    
+    # Telegram tiene un límite de 4096 caracteres por mensaje.
+    # Si el reporte es muy largo, hay que partirlo.
+    max_len = 4000
+    if len(msg) <= max_len:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    else:
+        # Dividir mensaje en partes
+        parts = [msg[i:i+max_len] for i in range(0, len(msg), max_len)]
         for part in parts:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             requests.post(url, data={"chat_id": CHAT_ID, "text": part, "parse_mode": "Markdown"})
             time.sleep(1)
-    else:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-# --- CÁLCULOS MATEMÁTICOS (Nativos y Robustos) ---
+# --- CÁLCULOS MATEMÁTICOS ---
 def calculate_heikin_ashi(df):
     df_ha = df.copy()
     df_ha['HA_Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    
-    # Cálculo iterativo para coincidir con TV
     ha_open = [df['Open'].iloc[0]]
     for i in range(1, len(df)):
         ha_open.append((ha_open[-1] + df_ha['HA_Close'].iloc[i-1]) / 2)
     df_ha['HA_Open'] = ha_open
-    
     df_ha['Color'] = np.where(df_ha['HA_Close'] > df_ha['HA_Open'], 1, -1)
     return df_ha
 
@@ -91,134 +83,104 @@ def calculate_adx(df, period=14):
     dx = 100 * abs(p_di - n_di) / (p_di + n_di)
     return wilder(dx, period)
 
-# --- MOTOR DE BÚSQUEDA DE SEÑAL ---
-def get_last_signal(df, adx_th):
-    """Recorre la historia para encontrar la última señal válida"""
-    df['ADX'] = calculate_adx(df)
-    df_ha = calculate_heikin_ashi(df)
-    
-    last_signal = None
-    in_position = False
-    
-    for i in range(1, len(df_ha)):
-        color = df_ha['Color'].iloc[i]
-        adx = df['ADX'].iloc[i]
-        date = df_ha.index[i]
-        price = df_ha['Close'].iloc[i]
-        
-        # COMPRA: Verde + ADX>20
-        if not in_position and color == 1 and adx > adx_th:
-            in_position = True
-            last_signal = {"Tipo": "🟢 COMPRA", "Fecha": date, "Precio": price, "ADX": adx, "Color": 1}
-        # VENTA: Rojo
-        elif in_position and color == -1:
-            in_position = False
-            last_signal = {"Tipo": "🔴 VENTA", "Fecha": date, "Precio": price, "ADX": adx, "Color": -1}
-            
-    # Si no hubo cruce, devolvemos el estado de la última vela
-    if not last_signal:
-        curr = df_ha.iloc[-1]
-        t = "🟢 COMPRA" if curr['Color'] == 1 else "🔴 VENTA"
-        last_signal = {"Tipo": t, "Fecha": curr.name, "Precio": curr['Close'], "ADX": df['ADX'].iloc[-1], "Color": curr['Color']}
-        
-    return last_signal
-
+# --- MOTOR PRINCIPAL ---
 def run_bot():
     print(f"--- START: {datetime.now()} ---")
     
-    # Almacén de datos
-    all_signals_list = []      # Para el reporte detallado ordenado por fecha
-    market_summary = {}        # Para el reporte de semáforo (Mapa)
+    # Memoria del estado de mercado
+    market_state = {t: {} for t in TICKERS}
     
-    # Inicializar diccionario de resumen
-    for t in TICKERS: market_summary[t] = {}
-
-    # --- CICLO DE ESCANEO ---
-    for interval, label, period in TIMEFRAMES:
-        print(f"Escaneando {label}...")
+    # 1. ESCANEO MASIVO
+    for interval, label_key, period in TIMEFRAMES:
         try:
             data = yf.download(TICKERS, interval=interval, period=period, group_by='ticker', progress=False, auto_adjust=True)
-            
             for ticker in TICKERS:
                 try:
                     df = data[ticker].dropna() if len(TICKERS)>1 else data.dropna()
-                    if df.empty or len(df)<50: continue
+                    if df.empty: continue
                     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-                    # Analizar
-                    sig = get_last_signal(df, ADX_TH)
+                    # Indicadores
+                    df['ADX'] = calculate_adx(df)
+                    df_ha = calculate_heikin_ashi(df)
                     
-                    if sig:
-                        # 1. Guardar para el Resumen (Mapa)
-                        market_summary[ticker][interval] = sig['Color']
-                        if interval == '1d': 
-                            market_summary[ticker]['Price'] = sig['Precio']
-                        
-                        # 2. Guardar para la Lista Detallada
-                        all_signals_list.append({
-                            "Ticker": ticker,
-                            "TF": label,
-                            "Tipo": sig['Tipo'],
-                            "Precio": sig['Precio'],
-                            "ADX": sig['ADX'],
-                            "Fecha": sig['Fecha'], # Objeto datetime para ordenar
-                            "Fecha_Str": sig['Fecha'].strftime('%d-%m-%Y')
-                        })
+                    # Guardamos datos de la última vela cerrada/actual
+                    last = df_ha.iloc[-1]
+                    prev = df_ha.iloc[-2]
+                    
+                    # Guardamos Estado (1 Verde, -1 Rojo) y Datos
+                    market_state[ticker][label_key] = {
+                        'Color': last['Color'],
+                        'Prev_Color': prev['Color'], # Para detectar cambios recientes
+                        'Price': last['Close'],
+                        'ADX': last['ADX']
+                    }
                 except: pass
         except: pass
 
-    # --- ENVÍO 1: REPORTE MAPA (SEMÁFORO) ---
-    full_bull, starting_bull, pullback, full_bear = [], [], [], []
+    # 2. CONSTRUCCIÓN DEL REPORTE DETALLADO
+    # Categorías
+    full_bull = []      # M+ S+ D+
+    starting_bull = []  # S+ D+ (Mes recuperando)
+    pullback = []       # M+ S+ D- (Oportunidad)
+    full_bear = []      # M- S- D-
+    mixed = []          # Ruido
     
-    for t, d in market_summary.items():
-        if '1mo' not in d or '1wk' not in d or '1d' not in d: continue
-        
-        m, w, day = d['1mo'], d['1wk'], d['1d']
-        p = d.get('Price', 0)
-        line = f"• {t}: ${p:.2f}"
-        
-        if m==1 and w==1 and day==1: full_bull.append(line)
-        elif m<=0 and w==1 and day==1: starting_bull.append(line)
-        elif m==1 and w==1 and day==-1: pullback.append(line)
-        elif m==-1 and w==-1 and day==-1: full_bear.append(line)
+    # Iconos
+    icon_map = {1: "🟢", -1: "🔴", 0: "⚪"}
 
-    map_msg = f"🗺️ **MAPA DE MERCADO** ({datetime.now().strftime('%d/%m')})\n\n"
-    if starting_bull: map_msg += f"🌱 **NACIMIENTO TENDENCIA**\n" + "\n".join(starting_bull) + "\n\n"
-    if full_bull: map_msg += f"🚀 **TENDENCIA FUERTE**\n" + "\n".join(full_bull) + "\n\n"
-    if pullback: map_msg += f"⚠️ **CORRECCIÓN / PULLBACK**\n" + "\n".join(pullback) + "\n\n"
-    if full_bear: map_msg += f"🩸 **TENDENCIA BAJISTA**\n" + "\n".join(full_bear[:10]) + (f"\n...y {len(full_bear)-10} más" if len(full_bear)>10 else "")
+    for t, data in market_state.items():
+        if '1mo' not in data or '1wk' not in data or '1d' not in data: continue
+        
+        m_col = data['1mo']['Color']
+        w_col = data['1wk']['Color']
+        d_col = data['1d']['Color']
+        
+        price = data['1d']['Price']
+        adx_d = data['1d']['ADX']
+        
+        # Etiqueta Visual de la Matrioska: [M🟢 S🔴 D🟢]
+        visual_matrix = f"[{icon_map[m_col]} {icon_map[w_col]} {icon_map[d_col]}]"
+        
+        # Detectar si la señal diaria es NUEVA (De ayer a hoy)
+        is_new_signal = (data['1d']['Prev_Color'] != d_col)
+        new_tag = "🆕 " if is_new_signal else ""
+        
+        line = f"{new_tag}**{t}:** ${price:.2f} {visual_matrix} (ADX {adx_d:.0f})"
+        
+        # CLASIFICACIÓN
+        if m_col == 1 and w_col == 1 and d_col == 1:
+            full_bull.append(line)
+        elif m_col == -1 and w_col == 1 and d_col == 1:
+            starting_bull.append(line)
+        elif m_col == 1 and w_col == 1 and d_col == -1:
+            pullback.append(line)
+        elif m_col == -1 and w_col == -1 and d_col == -1:
+            full_bear.append(line)
+        else:
+            mixed.append(line)
+
+    # 3. ENVÍO DEL MENSAJE (Sin censura)
+    report = f"📊 **INFORME COMPLETO** ({datetime.now().strftime('%d/%m')})\n"
+    report += "Leyenda: [Mes Sem Dia]\n\n"
     
-    send_message(map_msg)
-    time.sleep(2)
-
-    # --- ENVÍO 2: LISTA DE SEÑALES DETALLADA (ORDENADA POR FECHA) ---
-    if all_signals_list:
-        # Ordenar: La más reciente primero
-        all_signals_list.sort(key=lambda x: x['Fecha'], reverse=True)
+    if starting_bull:
+        report += f"🌱 **NACIMIENTO DE TENDENCIA (Oportunidad)**\n" + "\n".join(starting_bull) + "\n\n"
         
-        # Filtro de cantidad para no saturar (ej: últimas 30 señales del mercado)
-        # Puedes aumentar este número si quieres recibir más
-        TOP_SIGNALS = 30
+    if full_bull:
+        report += f"🚀 **TENDENCIA ALCISTA (Full Bull)**\n" + "\n".join(full_bull) + "\n\n"
         
-        header = f"📋 **ÚLTIMAS {TOP_SIGNALS} SEÑALES DETECTADAS**\n(Ordenadas por fecha reciente)\n"
-        send_message(header)
+    if pullback:
+        report += f"⚠️ **CORRECCIÓN / PULLBACK (Atentos)**\n" + "\n".join(pullback) + "\n\n"
         
-        for s in all_signals_list[:TOP_SIGNALS]:
-            icon = "🚨" if "VENTA" in s['Tipo'] else "🚀"
-            
-            # FORMATO EXACTO DE TU IMAGEN
-            msg = (
-                f"{icon} **{s['Ticker']} ({s['TF']})**\n"
-                f"**{s['Tipo']}**\n"
-                f"Precio: ${s['Precio']:.2f}\n"
-                f"ADX: {s['ADX']:.1f}\n"
-                f"Fecha Señal: {s['Fecha_Str']}"
-            )
-            send_message(msg)
-            time.sleep(0.5) # Pausa leve para evitar bloqueo
-            
-    else:
-        send_message("🤖 No se encontraron señales.")
+    if full_bear:
+        report += f"🩸 **TENDENCIA BAJISTA (Full Bear)**\n" + "\n".join(full_bear) + "\n\n"
+        
+    # Descomentar si quieres ver también los activos en rango/ruido
+    # if mixed:
+    #    report += f"💤 **LATERAL / RUIDO**\n" + "\n".join(mixed) + "\n\n"
+    
+    send_message(report)
 
 if __name__ == "__main__":
     run_bot()
