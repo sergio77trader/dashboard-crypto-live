@@ -1,0 +1,44 @@
+name: Market Watchdog
+
+on:
+  schedule:
+    # Horarios en Tiempo Universal (UTC)
+    # Lunes (1) a Viernes (5)
+    
+    # 1. APERTURA (11:00 AM Argentina aprox)
+    - cron: '0 14 * * 1-5'
+    
+    # 2. MEDIA RUEDA (02:00 PM Argentina aprox)
+    - cron: '0 17 * * 1-5'
+    
+    # 3. CIERRE (05:30 PM Argentina aprox - Para Swing)
+    - cron: '30 20 * * 1-5'
+    
+  workflow_dispatch: # Esto habilita el botón manual
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Descargar tu código
+      - name: Checkout del repositorio
+        uses: actions/checkout@v3
+
+      # 2. Instalar Python
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      # 3. Instalar librerías necesarias
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      # 4. Ejecutar tu robot
+      - name: Correr Escáner
+        env:
+          # Conectar con las claves que guardaste en Secrets
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python alerta_bot.py
